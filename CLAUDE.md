@@ -21,9 +21,10 @@ than fair. It settles those selections against real results, scores the
 resulting **strategies** (not tipster accounts) by ROI with CLV
 (closing-line value) as the fast headline signal, and serves the
 surviving high-confidence picks to a native Android app built with
-Expo/React Native. A separate audit-only track evaluates Aviator and
-virtual-match "signal" accounts against chance — it never produces a
-slip, and is unaffected by this amendment.
+Flutter (Amendment C — switched from the original Expo/React Native
+plan). A separate audit-only track evaluates Aviator and virtual-match
+"signal" accounts against chance — it never produces a slip, and is
+unaffected by either amendment.
 
 Why the change: the tipster-scoring machinery below exists to *find
 someone with an edge*. Sharp bookmakers already price more accurately
@@ -100,22 +101,36 @@ worker.
 
 ### Mobile
 
+**Amended (Amendment C) — Flutter, not Expo/React Native.** The original
+plan specified Expo/RN; that's reversed here while it was still free to
+reverse (no mobile code had been written). Reference implementation:
+[`lumeierecollection-blip/tradeapp`](https://github.com/lumeierecollection-blip/tradeapp),
+path `signal_aggregator/` — a working Flutter app with its own
+APK-to-artifact GitHub Actions pipeline, an adapter pattern
+(`SignalSource`/`SourceRegistry`) that maps directly onto this project's
+source-adapter needs, and several patterns worth porting (see
+`docs/ARCHITECTURE.md` § "Build and delivery — the APK (Task B7)").
+
 | Layer | Choice | Notes |
 |---|---|---|
-| Framework | React Native via Expo (managed, prebuild) | Real native app — not a webview, not a PWA |
-| Language | TypeScript, strict | |
-| Navigation | `expo-router` | |
-| Motion | `react-native-reanimated` v3 | Non-negotiable — see `docs/DESIGN.md` §11.3 |
-| Gestures | `react-native-gesture-handler` | Needed for release velocity |
-| Materials | `expo-blur` | RN analogue of `backdrop-filter` |
-| Data | TanStack Query | Caching, refetch, offline behaviour |
-| Charts | Hand-rolled SVG via `react-native-svg` | No chart library defaults |
-| Styling | Token file + `StyleSheet` | NativeWind optional; ask before adding |
-| Build | GitHub Actions → APK artifact | See `docs/STATUS.md` for build/install instructions |
+| Framework | Flutter (stable channel) | Real native app — not a webview, not a PWA |
+| Language | Dart | |
+| Navigation | Plain `Navigator` / `IndexedStack` tab shell | Matches `tradeapp`'s `app_shell.dart`; no router package needed at this scale |
+| State | `provider` (`ChangeNotifier`) | Matches `tradeapp`; no separate data-fetching library |
+| Motion | `AnimationController` + `SpringSimulation` | Non-negotiable — see `docs/DESIGN.md` §11.3/§11.3a |
+| Gestures | Built-in `GestureDetector` / `Draggable` | No extra package needed |
+| Materials | `BackdropFilter` + `ImageFilter.blur` | Flutter analogue of `backdrop-filter`; budget it, see §11.3a |
+| Charts | Hand-rolled via `CustomPainter` | No chart library defaults |
+| Styling | `theme.dart` token structure (`ThemeData`, `ColorScheme.fromSeed`) | Port `tradeapp`'s structure; drop `accentGradient` (§11.7), add tabular figures everywhere |
+| Build | GitHub Actions → APK artifact | Port `tradeapp`'s `build-apk.yml` with 4 fixes — see `docs/ARCHITECTURE.md` |
 
-Do **not** use `Animated` from React Native core — use Reanimated. Core
-`Animated` drops frames on data-heavy lists and cannot deliver the
-interruptible, velocity-aware motion `docs/DESIGN.md` requires.
+Do **not** use Flutter's implicit animation widgets (`AnimatedContainer`,
+`AnimatedOpacity`, `AnimatedPositioned`, `CurvedAnimation` with a fixed
+`Duration`) on any surface the user can touch — they're fixed-duration
+and non-interruptible, discard velocity, and restart from zero when
+re-targeted. Use `AnimationController.animateWith(SpringSimulation(...))`
+instead, seeded from the controller's current value and velocity. Full
+detail in `docs/DESIGN.md` §11.3a.
 
 ## Data sources — summary (details in `docs/ARCHITECTURE.md`)
 
@@ -195,7 +210,7 @@ recorded in `docs/STATUS.md`.
 | B4 | Manual price check API + screen | |
 | B5 | Repoint scoring to strategies, add CLV | |
 | B6 | Settlement against real results (original §6/Task 3, unchanged machinery) | |
-| B7 | Expo app scaffold + APK build workflow — demo mode removed; real odds/fixtures data exists by the time this lands, so screens have real content from the start | |
+| B7 | Flutter app scaffold + APK build workflow, ported from `tradeapp` — demo mode removed; real odds/fixtures data exists by the time this lands, so screens have real content from the start | |
 
 B7 is deliberately last in this plan, not first — B2's data lands within
 days, so by the time the app is built there's something real to show

@@ -37,13 +37,36 @@ repointed to strategies".
 - **B2–B7** — not started. Next up is B2: fixtures + odds ingestion,
   `odds_snapshots` (append-only), closing-line capture.
 
+**Amendment C1 — mobile framework switched to Flutter (from Expo/React
+Native), before any mobile code existed.** Complete, this PR: docs only,
+verified against the real reference repo
+([`lumeierecollection-blip/tradeapp`](https://github.com/lumeierecollection-blip/tradeapp),
+`signal_aggregator/`) by cloning and reading it, not assumed from the
+amendment's description. `CLAUDE.md`'s mobile stack table,
+`docs/ARCHITECTURE.md` § "Build and delivery — the APK (Task B7)", and
+`docs/DESIGN.md` §§11.1/11.3–11.5 (plus new §11.3a) are rewritten for
+Flutter. This doesn't move Task B7 earlier — B2 is still next in the
+task order — but the plan for B7 is now fully specified: port
+`tradeapp`'s working `build-apk.yml` (fixing 4 confirmed bugs: silent
+debug-signing fallback, missing `--build-number`, fixed artifact name,
+overly broad triggers) and several of its patterns
+(`SignalSource`/`SourceRegistry` → `OddsProvider`/`ProviderRegistry`,
+`PaperTrader` → default-on paper-betting mode, `FactorScore.plain` →
+one-sentence rationale, `theme.dart` structure minus its gradient). Two
+things confirmed *not* to port: `reddit_source.dart`'s dead anonymous
+Reddit endpoint (independently corroborates the Agent Reach finding
+above — worth checking if that source has been silently dead), and
+`validator.dart`'s hand-weighted heuristic scoring, which this project's
+de-vigged market pricing already does better.
+
 ## What works
 
 - Repo skeleton exists: `CLAUDE.md`, `docs/`, `.claude/skills/`,
   `backend/`, `mobile/`, `.github/workflows/`.
 - `docs/ARCHITECTURE.md`, `docs/SCORING.md` (verbatim brief §7 + the
-  Amendment B5 addendum), `docs/DESIGN.md` (verbatim brief §11) are in
-  place as the persistent reference for every later session.
+  Amendment B5 addendum), `docs/DESIGN.md` (verbatim brief §11, with
+  §11.1/§11.3–§11.5 translated to Flutter and a new §11.3a per Amendment
+  C) are in place as the persistent reference for every later session.
 - `.claude/skills/apple-design/SKILL.md` and
   `.claude/skills/pick-ui-library/SKILL.md` are installed and will be
   auto-discovered by Claude Code.
@@ -83,10 +106,11 @@ repointed to strategies".
   - Anthropic API key, if/when the social path's extraction stage
     resumes (deferred Task 2).
   - `ANDROID_KEYSTORE_BASE64` + password/alias secrets for signed APK
-    builds (Task B7) — generate and store as GitHub secrets when that
-    task starts; never commit the keystore.
-  - `EXPO_PUBLIC_API_URL` for the mobile build once the API has a real
-    host.
+    builds (Task B7, Flutter now — see Amendment C) — generate and store
+    as GitHub secrets when that task starts; never commit the keystore.
+  - The real API-URL secret for the mobile build once the API has a real
+    host (naming convention TBD at B7 — Flutter/dart-define, not
+    `EXPO_PUBLIC_*`).
 
 ## How to download and install the APK
 
@@ -113,3 +137,7 @@ lands.
   Agent Reach is the one addition from Amendment A; it's pinned to a SHA
   in `docs/ARCHITECTURE.md`, not tracked on `main`, and unused while the
   social path is disabled.
+- When B7 starts: read `tradeapp`'s files directly before porting
+  anything from them (`docs/ARCHITECTURE.md` § "Patterns to port from
+  `tradeapp`" names the exact files) — don't rebuild from this repo's
+  summary of them, the summary can drift from the source.

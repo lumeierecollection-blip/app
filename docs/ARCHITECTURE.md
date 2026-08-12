@@ -768,70 +768,84 @@ See `docs/DESIGN.md` (verbatim, authoritative) for the full design brief.
 
 ## Build and delivery — the APK (Task B7)
 
-**Amendment B7: demo mode is removed from this task entirely.** The
-original spec (superseded) had the app ship a demo-data mode — fixtures
-from a committed `demo.json`, a persistent "DEMO DATA" banner — because
-there was no real data yet at the time the APK had to be proven. That
-premise is gone: B2 lands real fixtures/odds within days, so by the time
-this task runs there's real content to show. No fixtures screen, no
-banner, no `demo.json`, ever. The app talks to the real API from the
-start; if the API is unreachable, the right behavior is a normal loading
-error, not synthetic data standing in for it.
+**Amendment C: Flutter, not Expo/React Native — ported from
+[`lumeierecollection-blip/tradeapp`](https://github.com/lumeierecollection-blip/tradeapp),
+path `signal_aggregator/` (verified by cloning and reading it, not
+assumed from the amendment's description).** This reverses the earlier
+Expo/RN choice while it was still free to reverse: no mobile code exists
+yet, Task B7 hasn't started, and the Python backend is unaffected either
+way. Reasons: `tradeapp` has a *working* APK-to-artifact pipeline
+already producing installable builds (collapsing the riskiest part of
+this task from "debug Gradle/Babel/New-Architecture defaults from
+scratch" to "copy something proven and fix its known bugs"), its
+`SignalSource`/`SourceRegistry` adapter pattern is the same shape this
+project already needs for `OddsProvider`/`ProviderRegistry`, and
+Flutter's `SpringDescription.withDampingRatio` maps onto Apple's
+damping/response model at least as cleanly as Reanimated does. Full
+Flutter translation of the design system: `docs/DESIGN.md` §11.3–11.5
+and the new §11.3a addendum.
+
+**Amendment B7 still holds: demo mode is removed from this task
+entirely.** The original spec (superseded) had the app ship a demo-data
+mode — fixtures from a committed `demo.json`, a persistent "DEMO DATA"
+banner — because there was no real data yet at the time the APK had to
+be proven. That premise is gone: B2 lands real fixtures/odds within
+days, so by the time this task runs there's real content to show. No
+fixtures screen, no banner, no `demo.json`, ever. The app talks to the
+real API from the start; if the API is unreachable, the right behavior
+is a normal loading error, not synthetic data standing in for it.
 
 **Do the placeholder-first proof before building anything else in this
 task** — one screen, "hello", signed, downloaded, installed on a phone —
-before writing app-shell or design-system code. Debugging a broken
-Gradle config and a broken UI at the same time is how this stalls.
+before writing app-shell or design-system code. This is cheaper now than
+originally planned (a proven workflow exists to copy), but the ordering
+reason is unchanged: don't debug a broken Gradle config and a broken UI
+at the same time.
 
-**Verify framework versions before scaffolding — do not assume from
-memory.** Check current Expo docs for the SDK version, confirm compatible
-`react-native-reanimated`, `react-native-gesture-handler`, `expo-router`,
-`expo-blur` via `npx expo install --check`, and record what got pinned
-back in this file. Three traps that fail silently (app builds and runs,
-the feature just doesn't work):
+### Workflow — port `tradeapp`'s `build-apk.yml`, fix four real bugs
 
-- The Reanimated Babel plugin — v3 uses `react-native-reanimated/plugin`,
-  newer versions moved worklets to `react-native-worklets/plugin`. Wrong
-  one = animations never run, no error.
-- `GestureHandlerRootView` must wrap the app root, or gestures silently
-  do nothing.
-- New Architecture defaults changed across recent SDK versions — confirm
-  which is active and that the pinned libraries support it.
+Read directly from `tradeapp`'s `.github/workflows/build-apk.yml`: it
+works (Java 17, `subosito/flutter-action@v2` with caching,
+`flutter analyze` and `flutter test` gating the build,
+`if-no-files-found: error` on the upload) but has exactly the failure
+modes this project's own subprocess/doctor work already learned to
+avoid. Copy the workflow, keep everything above, fix these four,
+confirmed present in the source file:
 
-Add a smoke test to the placeholder screen (one spring animation, one
-pan gesture) so a version-pinning failure is visible on first install,
-not discovered three screens later.
+1. **Silent debug fallback (the big one).** The source workflow checks
+   for `KEYSTORE_BASE64` and builds `flutter build apk --debug` if it's
+   absent, instead of failing. Debug and release use different signing
+   keys, so a debug APK won't install over a release build — the user
+   uninstalls, loses app data, and nothing told them why. **Fail the job
+   if the keystore secret is missing; never fall back to debug
+   signing.**
+2. **No `versionCode` from the run number.** Neither `flutter build apk`
+   invocation passes `--build-number`. Successive builds carry the same
+   version, so Android may refuse the upgrade. Add
+   `--build-number=${{ github.run_number }}`.
+3. **Fixed artifact name** (`signal-aggregator-apk` in the source). You
+   can't tell which commit you installed from the artifact name alone.
+   Use `tipster-<short-sha>.apk`.
+4. **Triggers on `push` *and* `pull_request`.** Two APK builds per PR for
+   no benefit. Restrict to `push: [main]` plus `workflow_dispatch`.
 
-### Workflow
-
-`.github/workflows/build-apk.yml`, triggered on push to `main` and via
-`workflow_dispatch`.
-
-1. Checkout, Node 20, Java 17 (Gradle/AGP requires it).
-2. `npm ci`.
-3. `npx expo prebuild --platform android --clean`.
-4. Decode the keystore from secrets to a file outside the repo tree.
-5. Gradle `assembleRelease`.
-6. `actions/upload-artifact`, named `tipster-<short-sha>.apk`, retention
-   30 days.
-
-- Fixed signing keystore: `ANDROID_KEYSTORE_BASE64` (base64), plus
-  `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`.
-  Never committed, never echoed. A debug key or a fresh key per build
-  makes each new APK refuse to install over the last one — **fail the
-  job loudly if the keystore secret is missing; never silently fall back
-  to debug signing.**
-- `versionCode` from `github.run_number` so successive builds upgrade
-  cleanly instead of conflicting.
-- `EXPO_PUBLIC_API_URL` from secrets.
-- Cache Gradle and npm — cold-installing every run burns Actions minutes.
+- Fixed signing keystore, same naming as the original Expo-era plan:
+  `ANDROID_KEYSTORE_BASE64` (base64), plus `ANDROID_KEYSTORE_PASSWORD`,
+  `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`. Never committed, never
+  echoed.
+- `EXPO_PUBLIC_API_URL` becomes whatever env-var convention Flutter/dart-define
+  uses for this project — decide and record here when B7 starts; the
+  requirement (demo-mode-free, real API URL injected from secrets) is
+  unchanged.
 
 ### App shell
 
-`expo-router` tabs matching `docs/DESIGN.md` §11.8's labels — Slips,
-Tipsters, Audit — plus Health and Admin. Every screen ships its real
-empty state (no stock illustrations, no emoji, per §11.7), since empty
-states are where this app spends its first weeks.
+Tabs matching `docs/DESIGN.md` §11.8's labels — Slips, Tipsters, Audit —
+plus Health and Admin, using the plain `Navigator`/`IndexedStack` pattern
+`tradeapp`'s `app_shell.dart` already demonstrates (see the Mobile stack
+table in `CLAUDE.md`) rather than adding a router package. Every screen
+ships its real empty state (no stock illustrations, no emoji, per
+§11.7), since empty states are where this app spends its first weeks.
 
 **Health screen — build this properly, it's the one immediately useful.**
 Per the odds-market path: last successful fixtures/odds poll per
@@ -842,18 +856,56 @@ last successful run, credential age. Clear visual distinction between
 and must never look the same, for the same reason `doctor`'s `off`/`warn`
 distinction mattered in the deferred path.
 
-### Design system
+### Design system — Flutter translation
 
-Build `mobile/theme/` per `docs/DESIGN.md` §11, before any screen work.
-Load `.claude/skills/apple-design/SKILL.md` first. `motion.ts` (spring
-tokens, §11.3), `type.ts` (tabular figures on every numeric style, built
-now even with no real numbers yet — retrofitting is how columns end up
-jittering), `color.ts` (semantic won/lost/void paired with a glyph,
-never colour alone), `materials.tsx` (blur chrome + reduce-transparency
-fallback). Reduce-motion and reduce-transparency wired at the root from
-the start. Include the §11.2 comment about deliberate stillness in data
-views in the code, so a later session doesn't "fix" it by adding
-animation.
+Full detail in `docs/DESIGN.md` §11.3–11.5 and §11.3a. Build
+`mobile/theme/` (or the Flutter-idiomatic equivalent path) before any
+screen work, loading `.claude/skills/apple-design/SKILL.md` first:
+`motion.dart` (the three precomputed `SpringDescription` values from
+§11.3a — nothing defines a spring inline), a type scale using
+`FontFeature.tabularFigures()` on every numeric style, `color.dart`
+(semantic won/lost/void paired with a glyph, never colour alone), and
+the `BackdropFilter` chrome treatment with the in-app reduce-transparency
+setting §11.3a specifies (Flutter has no OS-level signal for this,
+unlike reduce-motion/high-contrast, which do exist). Include the §11.2
+stillness-in-data-views comment in the code so a later session doesn't
+"fix" it by adding animation.
+
+### Patterns to port from `tradeapp` (verified against the real files)
+
+| From `tradeapp` (`signal_aggregator/lib/...`) | To this app | Note |
+|---|---|---|
+| `services/sources/signal_source.dart` + `source_registry.dart` — `SignalSource` abstract class, `SourceRegistry.fetchAll` (parallel `Future.wait`, dedupe by id, sort by timestamp) | `OddsProvider` / `ProviderRegistry` (Task B2) | Direct port of the adapter pattern, same shape this project already specified independently |
+| `services/paper_trader.dart` — `PaperTrader`, balance/open-trades/closed-trades/PnL, all persisted via `Storage` | Paper-betting mode, **default on** | Exactly how to accumulate the §7 50-selection sample gate and prove CLV before staking anything real |
+| `models/validated_signal.dart` — `FactorScore.plain`, a one-sentence plain-English explanation per factor | One-sentence plain-English rationale per selection (why it's +EV) | Genuinely good pattern, better than most production apps |
+| `ui/theme.dart` — `ColorScheme.fromSeed`, structured `ThemeData` | `theme.dart` structure | Port the structure; **drop `accentGradient`** (confirmed present at `theme.dart:23-27` — §11.7 anti-defaults forbid gradients); add `FontFeature.tabularFigures()` to every numeric style (`tradeapp` only applies it to one, `clockStyle`) |
+| `services/storage.dart` — `SharedPreferences`-backed key/value store | Local cache of selections and paper-betting results | Same simple persistence pattern, no need for anything heavier at this scale |
+
+**Two things confirmed by reading `tradeapp`, not ported:**
+
+- `services/sources/reddit_source.dart` fetches `reddit.com/r/<sub>/new.json`
+  anonymously and silently swallows all fetch errors per-subreddit
+  ("Skip failing subreddits silently"). This is the *exact* endpoint
+  Agent Reach's `reddit.py` documents as 403-blocked by anti-bot
+  measures (see "Data sources — deferred" above) — independent
+  confirmation of that finding from a second, unrelated codebase. A dead
+  source returning an empty list is indistinguishable from "no signals
+  today" without exactly the kind of health/skip-vs-empty tracking this
+  project's own doctor-preflight design (deferred, Task A3) exists to
+  catch. Worth checking whether that source has been silently dead.
+- `services/validator.dart`'s `Validator` assigns "probability" from
+  hand-chosen factor weights (momentum 30%, volume 20%, RSI 20%, entry
+  zone 20%, message clarity 10% — confirmed exact percentages in the
+  source comments). Those weights were picked, not fitted, so the output
+  is an index, not a calibrated probability. **Do not port this
+  approach.** This project's de-vigged market price (Amendment B3) is
+  derived from real money at risk, which is a fundamentally stronger
+  basis than a hand-tuned heuristic — the two aren't a fair swap, and
+  porting the weighting logic would quietly downgrade what B3 already
+  provides. Related: `tradeapp`'s `PaperTrader.highConfidenceAccuracy`
+  measures win rate — for this project that's the exact metric
+  `docs/SCORING.md` says lies (§7, ROI over hit rate); the closest
+  equivalent here reports ROI and CLV, never a bare accuracy number.
 
 ### Install instructions
 
