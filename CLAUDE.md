@@ -8,27 +8,54 @@ before writing code.
 
 ## What this is
 
-A system that ingests betting-tip posts from Telegram, Reddit, X, and
-(best effort) Facebook, snapshots them immutably at capture time, settles
-them against real results, scores each source by ROI (not hit rate), and
-serves the surviving high-confidence picks to a native Android app built
-with Expo/React Native. A separate audit-only track evaluates Aviator and
-virtual-match "signal" accounts against chance — it never produces a slip.
+**Amended (Amendment B) — this is the current, primary description.** The
+original plan was a tipster aggregator: ingest tip posts from Telegram,
+Reddit, X, and Facebook, and score the accounts. That premise is now the
+**deferred, optional path** (`sources.social.enabled`, default off — see
+"Data sources" below). The primary system instead finds its own edge
+directly in the odds market: it pulls fixtures and odds from a sharp
+reference book (Pinnacle, via an aggregator API) and a soft book you
+actually bet on, computes the fair (de-vigged) price from the sharp line,
+and flags selections where the soft book's price is meaningfully better
+than fair. It settles those selections against real results, scores the
+resulting **strategies** (not tipster accounts) by ROI with CLV
+(closing-line value) as the fast headline signal, and serves the
+surviving high-confidence picks to a native Android app built with
+Expo/React Native. A separate audit-only track evaluates Aviator and
+virtual-match "signal" accounts against chance — it never produces a
+slip, and is unaffected by this amendment.
+
+Why the change: the tipster-scoring machinery below exists to *find
+someone with an edge*. Sharp bookmakers already price more accurately
+than almost every tipster, and their prices are available over a plain
+API — no cookies, no burner accounts, no ToS risk. See
+`docs/ARCHITECTURE.md` § "Data sources — Amendment B" for the full
+reasoning, provider evaluation, and honest caveats (edges are small,
+consistently winning accounts get limited by soft books — this is a real
+method, not a shortcut to free money).
 
 ## The two things that decide whether this is worth anything
 
-1. **Snapshot every tip at post time.** Tipsters delete their losers.
-   Grading an account by reading its timeline later makes every account
-   look like a genius. `posts.captured_at` is set by us at ingest, never
-   parsed from the platform, and a selection is gradeable only if
-   `captured_at < kickoff_utc`. Anything captured after kickoff is stored
-   but permanently excluded from scoring. This is the single rule that
-   stops fake tipsters gaming the system. `selections` rows are immutable
-   after insert — corrections are new rows, never updates.
-2. **Rank by ROI, never hit rate.** 92% accuracy on 1.05 odds loses money.
-   Scoring ranks by `roi_ci_low` (the low end of a bootstrapped confidence
-   interval on ROI), not point ROI and not win rate. Full formula and
-   rules: `docs/SCORING.md`.
+1. **Snapshot every odds quote — never overwrite.** This is the
+   odds-market equivalent of the original anti-cherry-picking rule, and
+   it's just as load-bearing. `odds_snapshots` is append-only: every poll
+   writes a new row, nothing is ever updated in place, and the last
+   snapshot before kickoff is explicitly flagged as the **closing line**.
+   Without the full price history you cannot compute CLV, and CLV is the
+   only fast signal available before a strategy has hundreds of settled
+   bets. (The original rule — `posts.captured_at` set by us at ingest,
+   never parsed from the platform, gradeable only if `captured_at <
+   kickoff_utc` — still applies verbatim if/when the social path is
+   re-enabled; `selections` rows stay immutable after insert there too.)
+2. **Rank by ROI, never hit rate — and treat CLV as the faster check.**
+   92% accuracy on 1.05 odds loses money. Scoring ranks by `roi_ci_low`
+   (the low end of a bootstrapped confidence interval on ROI), not point
+   ROI and not win rate. **CLV is the headline metric above ROI**: ROI
+   over 50 bets is mostly noise, CLV over 50 bets is real signal. A
+   strategy with good ROI but negative CLV got lucky — show that
+   explicitly, never let the ROI number stand alone. Full formulas and
+   rules: `docs/SCORING.md` (original engine, verbatim) plus the
+   Amendment B5 addendum at its end (strategies + CLV).
 
 ## Standing rules (apply to every session, not just the one that wrote this)
 
@@ -63,7 +90,7 @@ worker.
 | Layer | Choice | Notes |
 |---|---|---|
 | Language | Python 3.11 | |
-| Polled ingestion | GitHub Actions cron | Reddit, odds, results |
+| Polled ingestion | GitHub Actions cron | Odds, fixtures, results (Reddit/X deferred — see Data sources) |
 | Telegram ingestion | Long-lived worker on Fly.io or Railway | MTProto needs a persistent session file on a volume |
 | Database | Postgres — Supabase or Neon | Real transactions and window functions required; not SQLite |
 | Queue | Postgres `SELECT … FOR UPDATE SKIP LOCKED` | No Redis at this volume |
@@ -92,49 +119,62 @@ interruptible, velocity-aware motion `docs/DESIGN.md` requires.
 
 ## Data sources — summary (details in `docs/ARCHITECTURE.md`)
 
-**Amended from the original plan** — see "Ingestion architecture" in
-`docs/ARCHITECTURE.md` for the full reasoning and verified findings.
+**Amendment B (current, primary path) — odds market, not tipsters:**
 
-- **Telegram** — primary source, built first, unaffected by the
-  amendment. Telethon (MTProto) or Bot API. Persistent session file on a
-  mounted volume. On `FloodWaitError`, sleep exactly the `seconds` value
-  it carries — never retry blind.
-- **X** — no paid API needed. [Agent Reach](https://github.com/Panniantong/agent-reach)'s
-  `twitter-cli` backend runs headless on Cookie-Editor-exported cookies
+- **Odds:** The Odds API, provisionally pinned. Needs to carry Pinnacle
+  (or another recognised sharp book) as the fair-price reference.
+  **Caveat, not yet live-verified:** this session's network policy
+  blocks direct fetches to odds/bookmaker domains, so the pin is based on
+  corroborated secondary sources, not a live test call — confirm against
+  a real API response the first time ingestion code actually runs (Task
+  B2), and update this note once confirmed. Likely **no South African
+  bookmaker coverage** — the manual price check (§B4) is the primary way
+  to use this for an SA book, not a fallback.
+- **Fixtures + results:** API-Football (api-sports.io) — free tier
+  confirmed via independent sources: 100 requests/day, no card required,
+  all endpoints. Better-corroborated than SportMonks's free tier, which
+  only covers two leagues without a paid trial.
+- Cache hard, budget requests explicitly — free tiers are small.
+- No cookies, no burner accounts, no proxy, no ToS risk on this path.
+
+**Deferred, not deleted — social/tipster path (`sources.social.enabled`,
+default off):**
+
+- **Telegram** — Telethon (MTProto) or Bot API, persistent session file
+  on a mounted volume. Was "primary source, built first" before this
+  amendment; now optional. On `FloodWaitError`, sleep exactly the
+  `seconds` value it carries — never retry blind.
+- **X** — [Agent Reach](https://github.com/Panniantong/agent-reach)'s
+  `twitter-cli` backend, headless via Cookie-Editor-exported cookies
   (`TWITTER_AUTH_TOKEN` + `TWITTER_CT0`, child-process env only, never
-  argv). This is ToS-adjacent cookie access on a **burner account** — a
-  leaked cookie pair is full account takeover. Prefer stable commands
-  (`feed`, `user-posts`) over `search`, which the upstream tool flags as
-  unstable.
-- **Reddit** — PRAW is dead for new users: Reddit closed self-service API
-  registration in November 2025 (confirmed independently, not just
-  assumed from a README). Use Agent Reach's `rdt-cli` backend instead —
-  the only one of its two backends that doesn't require a live desktop
-  Chrome session. Pinned fork commit, cookie auth, and itself unmaintained
-  upstream since March 2026 — treat as more fragile than the X adapter.
-- **Facebook** — still deprioritized, and Agent Reach confirms rather
-  than changes this: its only backend (OpenCLI) requires a live desktop
-  Chrome session and is explicitly not recommended for servers. Adapter
-  interface defined, left unimplemented; manual-paste fallback in the
-  admin screen instead.
-- **Odds and results** — API-Football/SportMonks for fixtures+results,
-  The Odds API (or equivalent) to verify claimed odds. Cache aggressively;
-  these are metered.
-- **Agent Reach** is pinned to a commit SHA, recorded in
-  `docs/ARCHITECTURE.md` — never tracks `main`. `pip install agent-reach`
-  installs an unrelated package (name collision on PyPI); the pinned
-  Git install is the only correct one, also recorded there.
-- Budget for a residential proxy (Webshare, ~$1/month) — both X and
-  Reddit backends risk server-IP blocking.
+  argv). ToS-adjacent cookie access on a **burner account** — a leaked
+  cookie pair is full account takeover.
+- **Reddit** — PRAW is dead for new users (Reddit closed self-service API
+  registration Nov 2025, confirmed independently). Agent Reach's
+  `rdt-cli` backend instead — cookie auth, unmaintained upstream since
+  March 2026.
+- **Facebook** — deprioritized; Agent Reach's only backend (OpenCLI)
+  needs a live desktop Chrome session, not viable headless.
+- **Agent Reach** stays pinned to a commit SHA in `docs/ARCHITECTURE.md`
+  — never tracks `main`. `pip install agent-reach` installs an unrelated
+  package (name collision on PyPI); the pinned Git install is correct.
+- `backend/ingestion/cli_runner.py` (Amendment A2) is built and stays —
+  it's the shared subprocess runner this path will use whenever it's
+  re-enabled.
+- Budget for a residential proxy (Webshare, ~$1/month) if/when this path
+  is re-enabled — both X and Reddit backends risk server-IP blocking.
 
 ## Docs map
 
 - `docs/ARCHITECTURE.md` — data model, ingestion/extraction/settlement
   pipeline, adapters.
 - `docs/SCORING.md` — the ROI scoring formula, confidence intervals,
-  sample gates, and disqualifiers (source of truth, brief §7, verbatim).
-  Slip-building rules (brief §8) and the audit module (brief §9) are
-  summarized in `docs/ARCHITECTURE.md`.
+  sample gates, and disqualifiers (source of truth, brief §7, verbatim),
+  plus the Amendment B5 addendum at the end of the file (strategies
+  terminology, CLV as headline metric) — the addendum amends the
+  verbatim text above it, it doesn't replace it. Slip-building rules
+  (brief §8) and the audit module (brief §9) are summarized in
+  `docs/ARCHITECTURE.md`.
 - `docs/DESIGN.md` — mobile design brief: motion system, materials,
   typography, screens, anti-defaults (source of truth, brief §11).
 - `docs/STATUS.md` — current state: what works, what's stubbed, what's
@@ -145,23 +185,38 @@ interruptible, velocity-aware motion `docs/DESIGN.md` requires.
 One PR per task, in order. Do not run ahead of the current position
 recorded in `docs/STATUS.md`.
 
+**Active plan (Amendment B — odds-market path, current):**
+
+| # | Task | Status |
+|---|---|---|
+| B1 | Evaluate providers, confirm SA bookmaker and Pinnacle coverage, pin choices | Done — provisional, see caveat above |
+| B2 | Fixtures + odds ingestion, `odds_snapshots`, closing-line capture | Next |
+| B3 | De-vigging, edge calculation, sanity gates | |
+| B4 | Manual price check API + screen | |
+| B5 | Repoint scoring to strategies, add CLV | |
+| B6 | Settlement against real results (original §6/Task 3, unchanged machinery) | |
+| B7 | Expo app scaffold + APK build workflow — demo mode removed; real odds/fixtures data exists by the time this lands, so screens have real content from the start | |
+
+B7 is deliberately last in this plan, not first — B2's data lands within
+days, so by the time the app is built there's something real to show
+instead of a demo-data banner. This differs from the original brief's
+Task 7-before-8 ordering; the reason (prove the build pipeline before UI)
+is unchanged, it's just that "before UI" no longer means "before there's
+any data at all."
+
+**Deferred plan (original main brief — social/tipster path, on hold
+behind `sources.social.enabled`):**
+
 | # | Task |
 |---|---|
-| 0 | Repo skeleton + `CLAUDE.md` + docs |
-| 1 | Postgres schema + migrations + Telegram ingest for 3 channels, with capture-time snapshotting proven |
+| 0 | Repo skeleton + `CLAUDE.md` + docs — done |
+| 1 | Postgres schema + Telegram ingest for 3 channels — schema will be shared with the odds-market path; Telegram-specific ingest deferred |
 | 2 | Two-stage extractor (text) + fixture matching + review queue |
-| 3 | Results integration + settlement rules + full test suite |
-| 4 | Scoring engine — CIs, sample gates, disqualifiers |
-| 5 | Slip builder + correlation guard + margin computation |
-| 6 | FastAPI read API + auth |
-| 7 | Expo app scaffold + APK build workflow — prove an installable APK lands as an artifact before writing any screens |
-| 8 | Mobile screens per `docs/DESIGN.md` §11 |
-| 9 | Reddit adapter, image extraction, audit module |
-| 10 | X adapter — only if API budget is confirmed |
+| 9 | Reddit adapter (Amendment A5), image extraction, audit module — A1/A2 (research, `cli_runner.py`) already done and kept |
+| 10 | X adapter (Amendment A4) |
 
-Task 7 comes before Task 8 deliberately: prove the build pipeline with a
-one-screen app before building UI on top of it. Do not start Task 8 until
-Task 4 produces real numbers from real settled data.
+Do not resume this plan until the odds-market path (B1–B7) is working
+end to end, per the amendment's own priority.
 
 ## Audit module (Aviator / virtuals)
 

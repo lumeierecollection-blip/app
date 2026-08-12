@@ -7,23 +7,113 @@ two disagree, `docs/SCORING.md` wins for anything scoring-related.
 
 ## What the system does
 
-1. Ingests posts from betting-tip accounts on Telegram, Reddit, X, and
-   (best effort) Facebook.
-2. Parses each post into structured **selections** — match, market, pick,
-   odds, bookmaker, kickoff.
-3. Snapshots every selection at capture time so the source can't
-   retroactively edit or delete it.
-4. Settles each selection against real results after the fixture
-   completes.
-5. Maintains a rolling ROI-based reliability score per account, per
-   market type, with confidence intervals and a minimum-sample gate (see
-   `docs/SCORING.md`).
-6. Assembles surviving high-confidence selections into daily accumulator
-   slips across five odds bands.
-7. Runs an audit-only track for Aviator and virtual matches.
-8. Serves all of it to a native Android app.
+**Amended (Amendment B) — this is the current, primary flow.** The
+original plan (ingest and score tipster accounts from social platforms)
+is preserved below as a deferred, optional path
+(`sources.social.enabled`, default off). See "Data sources — Amendment B"
+and "Data sources — deferred" for the split.
 
-## Data sources
+1. Pulls fixtures and odds for upcoming matches from a fixtures/results
+   API and an odds API, and snapshots every odds quote — never
+   overwritten, with the closing line (last snapshot before kickoff)
+   explicitly flagged.
+2. Computes the fair, de-vigged probability from a sharp reference
+   book's price and flags a **selection** where a soft book's offered
+   price gives a meaningful edge over that fair price (or, via the
+   manual price check, where a bookmaker odds value you type in does).
+3. Settles each selection against real results after the fixture
+   completes.
+4. Maintains a rolling ROI-based reliability score per **strategy**
+   (competition + market type + edge threshold + source book, not a
+   social account), with confidence intervals, a minimum-sample gate, and
+   CLV (closing-line value) as the fast headline signal (see
+   `docs/SCORING.md`).
+5. Assembles surviving high-confidence, genuinely +EV selections into
+   daily accumulator slips across five odds bands.
+6. Runs an audit-only track for Aviator and virtual matches, unaffected
+   by this amendment.
+7. Serves all of it to a native Android app.
+
+Deferred path, same shape, kept behind the flag: ingest tip posts from
+Telegram/Reddit/X/Facebook, parse into selections, snapshot at capture
+time (`captured_at < kickoff_utc` gate), settle, score tipster accounts
+by ROI. Full detail in "Data sources — deferred" below.
+
+## Data sources — Amendment B (primary, odds-market path)
+
+Replaces the original §3 (and supersedes the earlier Agent Reach
+amendment as the *primary* ingestion path — that work is deferred, not
+deleted; see below). The reasoning: the tipster-scoring machinery exists
+to find someone with an edge, but a sharp bookmaker already prices more
+accurately than almost any tipster, and that price is available over a
+plain API with no cookies, no burner accounts, no ToS risk, and no
+blocked tasks.
+
+### Odds — The Odds API (provisionally pinned)
+
+**Verification status: not yet live-confirmed.** This session's network
+policy blocks direct fetches to odds/bookmaker/general-web domains
+(confirmed: both a direct `curl` through the environment's proxy and the
+`WebFetch` tool return a hard block — even for a page as unrelated as
+Wikipedia — so this isn't a gambling-specific block, it's this
+environment having no general web egress). B1 calls for live-verified
+free-tier limits and bookmaker coverage, and that couldn't be done from
+here. What follows is the best available corroborated secondary-source
+picture, and the user explicitly chose to proceed provisionally rather
+than block on it — **confirm all of it against a real API response the
+first time Task B2's ingestion code actually runs** (it runs in GitHub
+Actions, which has normal internet access), and update this section once
+confirmed.
+
+- Free "Starter" tier: 500 credits/month, no card required. A credit is
+  not 1:1 with a request — cost scales with how many markets/regions are
+  requested per call, so budget for that when designing the poll
+  schedule in Task B2.
+- Pinnacle (the sharp reference this whole method depends on) is
+  reported present in the "eu" region's bookmaker set. **Conflicting
+  secondary sources on whether Pinnacle specifically requires the paid
+  "Business" tier rather than the free "Starter" tier** — this is the
+  single most important thing to confirm with a real account before
+  building B3's edge calculation on it.
+- Context: Pinnacle closed its own public API to new signups on 2025-07-23
+  (corroborated by three independent sources — a betting-arbitrage forum,
+  a competing odds-API vendor's blog, and a third-party "drop-in
+  replacement" project's README). Aggregators that still carry Pinnacle
+  prices are relaying/scraping its public site odds, not using a
+  restored official feed.
+- **No evidence found of a South Africa region or any South African
+  bookmaker** (Hollywoodbets, Betway, Supabets, Sportingbet) on The Odds
+  API. Treat this as very likely true, not just unconfirmed — which
+  means the manual price check (Task B4) is the primary way to use this
+  system against a South African book, not a fallback for the cases the
+  API doesn't cover.
+- Regions observed in documentation excerpts: `us`, `us2`, `uk`, `au`,
+  `eu`. No `za`.
+
+### Fixtures and results — API-Football (api-sports.io)
+
+Better-corroborated than the odds provider, from multiple independent
+sources: free tier is 100 requests/day, no card required, all endpoints,
+resets at 00:00 UTC (unused requests are lost, they don't roll over).
+SportMonks's permanent free tier only covers two leagues (Danish
+Superliga, Scottish Premiership); a fuller trial needs a card. API-Football
+is the better free-tier-first choice for fixtures + results.
+
+### Budget discipline
+
+Cache aggressively and design the poll schedule around the credit/request
+budget explicitly (Task B2) — a naive polling loop exhausts a free tier's
+monthly allowance in a day. Quota exhaustion becomes the silent-failure
+mode for this path, in exactly the way cookie expiry was for the social
+path — the Health screen (Task B7) needs to surface it the same way
+`ingestion_health` was designed to surface doctor failures.
+
+## Data sources — deferred (social/tipster path, `sources.social.enabled`, default off)
+
+Everything in this section is preserved, not deleted — Amendment B just
+demoted it from primary to optional. Re-enable it as a later input once
+the odds-market path (B1–B7) is working end to end. The original
+reasoning for each platform below still holds; only its priority changed.
 
 Each source is handled by its own adapter behind a common `SourceAdapter`
 interface — there is deliberately no single generic scraper. This section
@@ -201,19 +291,14 @@ done by separate CLIs it installs (`twitter`, `rdt`, `opencli`, `yt-dlp`,
   for CI is possible; never pass the cookie value as a positional
   argument (`--stdin` exists specifically to avoid that).
 
-### Odds and results — the settlement backbone
-Without reliable results there is no scoring and the product is
-worthless.
+## Ingestion architecture — social path (deferred, `sources.social.enabled`)
 
-- **Fixtures + results:** API-Football (api-sports.io) or SportMonks.
-  Need kickoffs, final scores, and granularity for 1X2, O/U, BTTS, AH,
-  correct score, cards, corners.
-- **Odds:** The Odds API or equivalent, to verify the odds a tipster
-  claimed were actually available. Claimed-odds inflation is rampant —
-  if they say 2.10 and the market was 1.72, score them at 1.72.
-- Cache aggressively. These are metered.
-
-## Ingestion architecture — where Agent Reach sits
+The subsections below (subprocess contract, doctor preflight, credential
+lifecycle, scheduling) describe how the deferred social/tipster path
+would ingest via Agent Reach. None of it runs by default; it's preserved
+so re-enabling the flag is a config change, not a rebuild. The primary
+path's ingestion mechanics (odds/fixtures polling, `odds_snapshots`) are
+in "Ingestion architecture — odds-market path" further below.
 
 Agent Reach and its upstream CLIs live **only in the ingestion layer**.
 Nothing downstream of `posts` knows they exist.
@@ -324,17 +409,24 @@ expected event, not an incident:
 - `doctor` runs first, in the same job, and the job fails loudly on a
   total outage.
 
-### Task order for this amendment
+### Task order for this amendment — deferred, on hold behind the flag
+
+Amendment B demoted this whole path from primary to optional. A1/A2 are
+done and kept as-is (research doesn't rot, and `cli_runner.py` is
+reusable infra with no live-credential dependency). A3–A7 are on hold,
+not abandoned — resume them only once the odds-market path (B1–B7) is
+working end to end and there's a reason to re-enable
+`sources.social.enabled`.
 
 | # | Task | Status |
 |---|---|---|
-| A1 | Read the repo, write findings here, pin the SHA | Done, this PR |
-| A2 | `cli_runner.py` + credential redaction + timeout handling, with tests | Done, this PR |
-| A3 | Doctor preflight + `ingestion_health` table + skip-vs-warn distinction | Next |
-| A4 | X adapter via `twitter-cli`, with liveness probe | Blocked — needs a burner X account + Cookie-Editor cookies |
-| A5 | Reddit: `rdt-cli` adapter (official-API path confirmed unavailable, see above) | Blocked — needs a burner Reddit account + cookies |
-| A6 | `docs/RUNBOOK.md` + automatic issue-on-failure | |
-| A7 | Health surfacing in the mobile app | |
+| A1 | Read the repo, write findings here, pin the SHA | Done |
+| A2 | `cli_runner.py` + credential redaction + timeout handling, with tests | Done |
+| A3 | Doctor preflight + `ingestion_health` table + skip-vs-warn distinction | On hold (Amendment B) |
+| A4 | X adapter via `twitter-cli`, with liveness probe | On hold (Amendment B) — was also blocked on a burner X account |
+| A5 | Reddit: `rdt-cli` adapter (official-API path confirmed unavailable, see above) | On hold (Amendment B) — was also blocked on a burner Reddit account |
+| A6 | `docs/RUNBOOK.md` + automatic issue-on-failure | On hold (Amendment B) |
+| A7 | Health surfacing in the mobile app | On hold (Amendment B) — superseded by B7's Health screen, which reports odds-market quota/staleness instead |
 
 ### A2 — `backend/ingestion/cli_runner.py`
 
@@ -370,9 +462,161 @@ to an upstream CLI:
 
 Facebook stays unimplemented. Telegram is unaffected by this amendment.
 
+## Ingestion architecture — odds-market path (Amendment B, primary)
+
+Runs on GitHub Actions cron, same infrastructure pattern as the deferred
+path but no CLI subprocesses, no cookies — plain HTTPS calls to two REST
+APIs, cached and budgeted against their free-tier limits (Task B2).
+
+- Pull fixtures for the next 7 days for configured competitions from
+  API-Football.
+- Poll odds for each fixture on a widening-then-tightening schedule: on
+  discovery, then at widening intervals, then every 15 minutes in the
+  final 2 hours before kickoff — line movement near kickoff carries the
+  most information, and this is also where the request budget should be
+  concentrated rather than spread evenly.
+- **Every odds snapshot is stored, never overwritten** — this is the
+  direct equivalent of the post-time snapshotting rule from the original
+  brief, and just as load-bearing: without the full price history there
+  is no CLV, and CLV is the only fast signal available before a strategy
+  has hundreds of settled bets. New table: `odds_snapshots` (see Data
+  model below).
+- The **closing line** — the last snapshot before kickoff — is captured
+  and flagged explicitly. It's the single most valuable field in the
+  database: every CLV calculation reads from it.
+- Track API credit/request consumption per run and surface it on the
+  Health screen (B7) — quota exhaustion here is the equivalent
+  silent-failure mode that cookie expiry was for the social path: the
+  job can run "successfully" and simply stop finding anything because
+  the quota is gone.
+
+## Fair price and value detection (Task B3)
+
+1. **De-vig the sharp book's prices** to get fair probabilities.
+   Multiplicative de-vigging (each implied probability divided by the sum
+   of all implied probabilities in the market) is fine for two-way
+   markets. For three-way markets (1X2) it's biased — it systematically
+   overprices longshots, because a draw or a big underdog absorbs more of
+   the vig proportionally than its true probability would justify. Use
+   **Shin's method** or the **power method** for 1X2 instead, and the
+   code implementing it must say in a comment which one and why — this
+   is exactly the kind of choice that looks interchangeable until it
+   silently biases every longshot selection in one direction.
+2. **Fair odds** = 1 / fair probability.
+3. **Edge** = (offered odds × fair probability) − 1.
+4. Flag a selection when edge exceeds a configurable threshold (start at
+   2%, make it a setting — not a constant, since the right threshold is
+   an empirical question this system doesn't have data to answer yet).
+5. **Sanity gates, all required, and each rejection logged with its
+   reason** — a large apparent edge is almost always a data error, not an
+   opportunity:
+   - reject if the sharp book's price is stale beyond a few minutes
+   - reject if the two books are pricing different lines (an AH −0.5
+     against an AH −0.75 is not the same bet, and comparing them produces
+     a nonsense edge)
+   - reject if the market looks suspended or the price is an obvious
+     outlier
+   - reject on low liquidity or very early lines (before the market has
+     found its price)
+
+## Manual price check (Task B4)
+
+The mode that works regardless of bookmaker API coverage, and — given no
+confirmed South African bookmaker coverage on the odds API (see above) —
+the primary way this system gets used against a South African book, not
+a fallback.
+
+- Pick a fixture and market; the app shows the fair probability and fair
+  odds computed from the sharp line (same de-vig math as B3).
+- Type in what your bookmaker is actually offering; the app returns the
+  edge and, if positive, a stake-fraction recommendation.
+- Every check is stored in `manual_checks` with the fair line **at the
+  time of the check**, so these get graded and scored exactly like
+  automatically-detected selections once the fixture settles — this
+  table is not a scratchpad, it's a source of real, scoreable strategies.
+- Optimize the input path for speed: a large numeric keypad, one-handed
+  operation, no navigation between entering a price and seeing the
+  answer. Reachable in one tap from the home screen — this is meant to
+  be used in the 10 seconds before placing a real bet, not as a research
+  tool you sit down with.
+
+## Scoring — repointed to strategies (Task B5)
+
+Full formulas and the exact addendum text live in `docs/SCORING.md`
+(Amendment B5, appended after the verbatim §7). Summary: the same
+engine — ROI, bootstrap CI, `roi_ci_low` ranking, 50-sample minimum gate,
+decay, disqualifiers — now grades **strategies** (competition + market
+type + edge threshold + source book) instead of tipster accounts, and
+**CLV is added as the headline metric shown above ROI** on every screen,
+since CLV over 50 bets is real signal where ROI over 50 bets is mostly
+noise. A strategy with good ROI but negative CLV must be shown as having
+gotten lucky, not presented as if the ROI figure alone were trustworthy.
+
 ## Data model (Postgres)
 
+Amendment B adds the primary-path tables (`fixtures`, `odds_snapshots`,
+`strategies`, `strategy_scores`, `manual_checks`) and extends
+`selections` with an `origin` so settlement/scoring/slips can operate on
+it uniformly regardless of where a selection came from. `sources`,
+`posts`, and `source_scores` are the deferred social-path tables —
+unchanged, kept for whenever `sources.social.enabled` is on.
+
 ```
+-- Amendment B — primary, odds-market path
+
+fixtures         id, competition, home, away, kickoff_utc, status,
+                 provider_fixture_id, created_at
+
+odds_snapshots   id, fixture_id, bookmaker, market, selection, line,
+                 odds, captured_at, is_closing_line
+                 -- append-only: a poll always inserts, never updates.
+                 -- is_closing_line is set on the last snapshot written
+                 -- before kickoff_utc for that fixture/bookmaker/market.
+
+strategies       id, competition, market_class, edge_threshold,
+                 source_book, active, first_seen
+                 -- the thing that gets scored; replaces a tipster
+                 -- "source" for auto-detected selections
+
+manual_checks    id, fixture_id, market, pick, line, fair_probability,
+                 fair_odds, entered_odds, entered_bookmaker, edge,
+                 stake_fraction, checked_at, selection_id
+                 -- every check is logged here regardless of outcome;
+                 -- selection_id is set only if the user confirms they
+                 -- actually placed the bet, which promotes it into a
+                 -- selections row for scoring
+
+strategy_scores  strategy_id, window(30d|90d|all), n_settled, roi,
+                 roi_ci_low, roi_ci_high, hit_rate, avg_odds, mean_clv,
+                 pct_positive_clv, longest_losing_run, computed_at
+                 -- same shape as the deferred path's source_scores,
+                 -- plus mean_clv / pct_positive_clv (Amendment B5)
+
+-- Shared by both paths
+
+selections       id, origin(social|auto_odds|manual_check), post_id,
+                 fixture_id, strategy_id, sport, competition, home, away,
+                 kickoff_utc, market, pick, line, claimed_odds,
+                 verified_odds, verified_odds_source, bookmaker,
+                 fair_probability, fair_odds, edge,
+                 confidence_extraction, extraction_model, created_at
+                 -- post_id set only when origin=social; fixture_id set
+                 -- for the other two origins
+
+settlements      selection_id, status(won|lost|void|push|ungradeable),
+                 settled_at, result_payload, settlement_rule_version
+
+slips            id, band(A|B|C|D|E), target_min_odds, target_max_odds,
+                 combined_odds, legs_json, built_at, status, settled_at
+
+-- Unaffected by Amendment B
+
+audit_calls      id, source_id, game(aviator|virtual_football|...),
+                 claimed_target, claimed_outcome, verifiable(bool),
+                 posted_at, captured_at, notes
+
+-- Deferred, social path (sources.social.enabled, default off)
+
 sources          id, platform, handle, display_name, first_seen, active,
                  followers_at_capture, notes
 
@@ -380,39 +624,37 @@ posts            id, source_id, platform_post_id, captured_at, posted_at,
                  raw_text, raw_json, media_urls, edited_flag, edited_at,
                  content_hash, deleted_detected_at
 
-selections       id, post_id, sport, competition, fixture_id, home, away,
-                 kickoff_utc, market, pick, line, claimed_odds,
-                 verified_odds, verified_odds_source, bookmaker,
-                 confidence_extraction, extraction_model, created_at
-
-settlements      selection_id, status(won|lost|void|push|ungradeable),
-                 settled_at, result_payload, settlement_rule_version
-
 source_scores    source_id, market_class, window(30d|90d|all),
                  n_settled, roi, roi_ci_low, roi_ci_high, hit_rate,
                  avg_odds, longest_losing_run, computed_at
-
-slips            id, band(A|B|C|D|E), target_min_odds, target_max_odds,
-                 combined_odds, legs_json, built_at, status, settled_at
-
-audit_calls      id, source_id, game(aviator|virtual_football|...),
-                 claimed_target, claimed_outcome, verifiable(bool),
-                 posted_at, captured_at, notes
 ```
 
 **Non-negotiable constraints:**
 
-- `posts.captured_at` is set by us at ingest. Never parsed from the
-  platform.
-- `content_hash` hashes the tip's semantic content at capture. Later
-  divergence flags the post as edited and disqualifies it.
-- A selection is gradeable only if `captured_at < kickoff_utc`. Anything
-  captured after kickoff is stored but permanently excluded from
-  scoring. **This single rule is what stops fake tipsters gaming the
-  system.**
-- `selections` are immutable after insert. Corrections are new rows.
+- `odds_snapshots` is append-only — a poll always inserts a new row,
+  never updates one in place. This is the primary path's equivalent of
+  post-time snapshotting: without the full price history there is no
+  CLV, and CLV is the only fast signal available before hundreds of bets
+  settle.
+- `posts.captured_at` (deferred path) is set by us at ingest. Never
+  parsed from the platform.
+- `content_hash` (deferred path) hashes the tip's semantic content at
+  capture. Later divergence flags the post as edited and disqualifies
+  it.
+- A social-origin selection is gradeable only if `captured_at <
+  kickoff_utc`. Anything captured after kickoff is stored but
+  permanently excluded from scoring. **This is the rule that stops fake
+  tipsters gaming the system**, on whichever future session re-enables
+  that path.
+- `selections` are immutable after insert, regardless of origin.
+  Corrections are new rows.
 
-## Tip extraction
+## Tip extraction (deferred, social path only)
+
+Only applies to `origin=social` selections — Amendment B's `auto_odds`
+and `manual_check` selections are computed directly from odds snapshots
+and typed-in prices, no LLM extraction involved. On hold along with the
+rest of the social path.
 
 Posts are messy — emoji, screenshots, multi-leg lists, slang, mixed
 languages, odds as "2.10" / "21/10" / "+110" / absent.
@@ -437,7 +679,11 @@ schema, instructed to return JSON only with no markdown fences.
 Images matter. A large share of Telegram tips are bet-slip screenshots.
 Pass them to the same model as base64 image blocks. Do not skip this.
 
-## Settlement
+## Settlement (Task B6 — unchanged machinery, now settles both origins)
+
+Unaffected by Amendment B (its own B6 explicitly says so) — this settles
+`selections` regardless of `origin`, auto-detected odds-market picks and
+manual checks exactly the same way it would settle a social tip.
 
 Sweep for selections where `kickoff_utc + 150 minutes < now` and status
 is null.
@@ -459,8 +705,18 @@ See `docs/SCORING.md` (verbatim, authoritative).
 
 ## Slip builder
 
-Daily job. Input: selections from `RATED` sources, kickoff today,
-`roi_ci_low > 0`, extraction confidence ≥ 0.75.
+Daily job. Input: selections from `RATED` strategies/sources, kickoff
+today, `roi_ci_low > 0`, extraction confidence ≥ 0.75 (social-origin
+only — `auto_odds`/`manual_check` selections use edge above the
+configured threshold in place of extraction confidence).
+
+**Amendment B addition: only genuinely +EV legs may enter a slip.**
+Combining legs with no edge just compounds the bookmaker's margin —
+this applies on top of, not instead of, the `roi_ci_low`/sample-gate
+filtering below. The margin and true-probability display in step 4 stays
+exactly as specified; with real edges now driving selection it becomes
+the safety surface `docs/DESIGN.md` §11.6 describes, not just a warning
+label on a demo.
 
 | Band | Target combined odds |
 |---|---|
@@ -510,26 +766,98 @@ slip builder.
 
 See `docs/DESIGN.md` (verbatim, authoritative) for the full design brief.
 
-## Build and delivery — the APK
+## Build and delivery — the APK (Task B7)
+
+**Amendment B7: demo mode is removed from this task entirely.** The
+original spec (superseded) had the app ship a demo-data mode — fixtures
+from a committed `demo.json`, a persistent "DEMO DATA" banner — because
+there was no real data yet at the time the APK had to be proven. That
+premise is gone: B2 lands real fixtures/odds within days, so by the time
+this task runs there's real content to show. No fixtures screen, no
+banner, no `demo.json`, ever. The app talks to the real API from the
+start; if the API is unreachable, the right behavior is a normal loading
+error, not synthetic data standing in for it.
+
+**Do the placeholder-first proof before building anything else in this
+task** — one screen, "hello", signed, downloaded, installed on a phone —
+before writing app-shell or design-system code. Debugging a broken
+Gradle config and a broken UI at the same time is how this stalls.
+
+**Verify framework versions before scaffolding — do not assume from
+memory.** Check current Expo docs for the SDK version, confirm compatible
+`react-native-reanimated`, `react-native-gesture-handler`, `expo-router`,
+`expo-blur` via `npx expo install --check`, and record what got pinned
+back in this file. Three traps that fail silently (app builds and runs,
+the feature just doesn't work):
+
+- The Reanimated Babel plugin — v3 uses `react-native-reanimated/plugin`,
+  newer versions moved worklets to `react-native-worklets/plugin`. Wrong
+  one = animations never run, no error.
+- `GestureHandlerRootView` must wrap the app root, or gestures silently
+  do nothing.
+- New Architecture defaults changed across recent SDK versions — confirm
+  which is active and that the pinned libraries support it.
+
+Add a smoke test to the placeholder screen (one spring animation, one
+pan gesture) so a version-pinning failure is visible on first install,
+not discovered three screens later.
+
+### Workflow
 
 `.github/workflows/build-apk.yml`, triggered on push to `main` and via
 `workflow_dispatch`.
 
-- `expo prebuild --platform android` to generate the native project, then
-  Gradle `assembleRelease`.
-- Sign with a fixed keystore stored base64-encoded in a GitHub secret
-  (`ANDROID_KEYSTORE_BASE64`, plus password/alias secrets), decoded at
-  build time. Never commit the keystore. A fresh key each build makes
-  the APK refuse to install over the previous one.
-- Cache Gradle and npm to keep build times sane.
-- Inject `EXPO_PUBLIC_API_URL` from secrets.
-- Upload the APK with `actions/upload-artifact`, named
-  `tipster-app-<short-sha>.apk`, retention 30 days.
-- Set `versionCode` from the run number so successive installs upgrade
-  cleanly rather than conflicting.
-- `docs/STATUS.md` documents exactly how to download and install it from
-  a phone, including the unknown-sources step, once Task 7 lands.
+1. Checkout, Node 20, Java 17 (Gradle/AGP requires it).
+2. `npm ci`.
+3. `npx expo prebuild --platform android --clean`.
+4. Decode the keystore from secrets to a file outside the repo tree.
+5. Gradle `assembleRelease`.
+6. `actions/upload-artifact`, named `tipster-<short-sha>.apk`, retention
+   30 days.
 
-Task 7 (in the task table in `CLAUDE.md`) proves this workflow
-end-to-end with a placeholder screen, before any real screens are built
-in Task 8.
+- Fixed signing keystore: `ANDROID_KEYSTORE_BASE64` (base64), plus
+  `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`.
+  Never committed, never echoed. A debug key or a fresh key per build
+  makes each new APK refuse to install over the last one — **fail the
+  job loudly if the keystore secret is missing; never silently fall back
+  to debug signing.**
+- `versionCode` from `github.run_number` so successive builds upgrade
+  cleanly instead of conflicting.
+- `EXPO_PUBLIC_API_URL` from secrets.
+- Cache Gradle and npm — cold-installing every run burns Actions minutes.
+
+### App shell
+
+`expo-router` tabs matching `docs/DESIGN.md` §11.8's labels — Slips,
+Tipsters, Audit — plus Health and Admin. Every screen ships its real
+empty state (no stock illustrations, no emoji, per §11.7), since empty
+states are where this app spends its first weeks.
+
+**Health screen — build this properly, it's the one immediately useful.**
+Per the odds-market path: last successful fixtures/odds poll per
+competition, API quota consumed, and staleness of the sharp line. Per
+the (currently disabled) social path, if re-enabled: current backend,
+last successful run, credential age. Clear visual distinction between
+"unhealthy" and "no edges found right now" — those are different facts
+and must never look the same, for the same reason `doctor`'s `off`/`warn`
+distinction mattered in the deferred path.
+
+### Design system
+
+Build `mobile/theme/` per `docs/DESIGN.md` §11, before any screen work.
+Load `.claude/skills/apple-design/SKILL.md` first. `motion.ts` (spring
+tokens, §11.3), `type.ts` (tabular figures on every numeric style, built
+now even with no real numbers yet — retrofitting is how columns end up
+jittering), `color.ts` (semantic won/lost/void paired with a glyph,
+never colour alone), `materials.tsx` (blur chrome + reduce-transparency
+fallback). Reduce-motion and reduce-transparency wired at the root from
+the start. Include the §11.2 comment about deliberate stillness in data
+views in the code, so a later session doesn't "fix" it by adding
+animation.
+
+### Install instructions
+
+`docs/STATUS.md` documents, written to be followed on a phone: finding
+the Actions run, downloading and unzipping the artifact, enabling
+install-from-unknown-sources, installing, and verifying the installed
+build matches the expected commit — once this task lands.
