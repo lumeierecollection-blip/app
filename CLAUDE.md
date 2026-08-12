@@ -92,20 +92,40 @@ interruptible, velocity-aware motion `docs/DESIGN.md` requires.
 
 ## Data sources — summary (details in `docs/ARCHITECTURE.md`)
 
-- **Telegram** — primary source, built first. Telethon (MTProto) or Bot
-  API. Persistent session file on a mounted volume. On `FloodWaitError`,
-  sleep exactly the `seconds` value it carries — never retry blind.
-- **Reddit** — PRAW, registered script app, poll `/new` and
-  `/user/<name>/submitted` every 3–5 minutes. Capture the `edited` field;
-  a tip edited after kickoff is disqualified.
-- **X** — API only, never a headless-browser scraper (ToS + anti-automation
-  risk to the account/IP). Behind the `SourceAdapter` interface so it can
-  be switched off. Ship without it unless the API budget is confirmed.
-- **Facebook** — deprioritized. Adapter interface defined, left
-  unimplemented; manual-paste fallback in the admin screen instead.
+**Amended from the original plan** — see "Ingestion architecture" in
+`docs/ARCHITECTURE.md` for the full reasoning and verified findings.
+
+- **Telegram** — primary source, built first, unaffected by the
+  amendment. Telethon (MTProto) or Bot API. Persistent session file on a
+  mounted volume. On `FloodWaitError`, sleep exactly the `seconds` value
+  it carries — never retry blind.
+- **X** — no paid API needed. [Agent Reach](https://github.com/Panniantong/agent-reach)'s
+  `twitter-cli` backend runs headless on Cookie-Editor-exported cookies
+  (`TWITTER_AUTH_TOKEN` + `TWITTER_CT0`, child-process env only, never
+  argv). This is ToS-adjacent cookie access on a **burner account** — a
+  leaked cookie pair is full account takeover. Prefer stable commands
+  (`feed`, `user-posts`) over `search`, which the upstream tool flags as
+  unstable.
+- **Reddit** — PRAW is dead for new users: Reddit closed self-service API
+  registration in November 2025 (confirmed independently, not just
+  assumed from a README). Use Agent Reach's `rdt-cli` backend instead —
+  the only one of its two backends that doesn't require a live desktop
+  Chrome session. Pinned fork commit, cookie auth, and itself unmaintained
+  upstream since March 2026 — treat as more fragile than the X adapter.
+- **Facebook** — still deprioritized, and Agent Reach confirms rather
+  than changes this: its only backend (OpenCLI) requires a live desktop
+  Chrome session and is explicitly not recommended for servers. Adapter
+  interface defined, left unimplemented; manual-paste fallback in the
+  admin screen instead.
 - **Odds and results** — API-Football/SportMonks for fixtures+results,
   The Odds API (or equivalent) to verify claimed odds. Cache aggressively;
   these are metered.
+- **Agent Reach** is pinned to a commit SHA, recorded in
+  `docs/ARCHITECTURE.md` — never tracks `main`. `pip install agent-reach`
+  installs an unrelated package (name collision on PyPI); the pinned
+  Git install is the only correct one, also recorded there.
+- Budget for a residential proxy (Webshare, ~$1/month) — both X and
+  Reddit backends risk server-IP blocking.
 
 ## Docs map
 

@@ -26,9 +26,15 @@ two disagree, `docs/SCORING.md` wins for anything scoring-related.
 ## Data sources
 
 Each source is handled by its own adapter behind a common `SourceAdapter`
-interface — there is deliberately no single generic scraper.
+interface — there is deliberately no single generic scraper. This section
+was amended to replace the original PRAW/paid-X-API plan after live
+research into [Agent Reach](https://github.com/Panniantong/agent-reach)
+showed the situation on Reddit and X had changed. Findings below are
+verified against the actual repo and a real install, not assumed from
+its README — see "Agent Reach — verified findings" below for how each
+claim was checked.
 
-### Telegram — primary source, built first
+### Telegram — primary source, built first, unaffected by this amendment
 Most real tipster volume is here, and it's the only platform with a
 clean, permitted, high-throughput read path.
 
@@ -41,27 +47,159 @@ clean, permitted, high-throughput read path.
   post-time snapshotting trivial.
 - On `FloodWaitError`, sleep exactly the `seconds` value it carries.
   Never retry blind.
+- Agent Reach does not cover Telegram. This adapter is built with
+  Telethon directly, exactly as originally planned.
 
-### Reddit — official API
-- **PRAW** with a registered script app.
-- Poll target subreddits' `/new` and `/user/<name>/submitted` every
-  3–5 minutes.
-- Capture the `edited` field. A tip edited after kickoff is disqualified.
+### X / Twitter — `twitter-cli` via Agent Reach, no paid API needed
+The original plan required Basic-tier paid API access or shipping
+without X. Agent Reach's `twitter-cli` backend removes that requirement:
+it authenticates with exported browser cookies and runs headless, so it
+works from a GitHub Actions runner with no API fee.
 
-### X — API only, and it costs money
-- The free tier is read-crippled; useful timeline reads need Basic tier.
-- Do not build a headless-browser scraper — it violates ToS and
-  anti-automation systems will kill the account and IP.
-- Behind the `SourceAdapter` interface so it can be switched off. If the
-  budget isn't confirmed, ship without X — Telegram plus Reddit covers
-  most volume.
+- **This is cookie-based, ToS-adjacent access on a burner account, not
+  an official integration.** Real risk: the account can be banned, and a
+  leaked cookie pair is full account takeover (no password needed). See
+  Credential lifecycle below.
+- Auth: export `TWITTER_AUTH_TOKEN` and `TWITTER_CT0` from x.com via the
+  Cookie-Editor "Header String" method, save with
+  `agent-reach configure twitter-cookies --stdin` (verified flag —
+  `--stdin` avoids putting the cookie value in process arguments), then
+  inject explicitly into each child process's environment at call time.
+  `doctor` only confirms the credentials were saved; it never runs
+  `twitter status`, so it cannot tell us whether they still work — our
+  own liveness probe has to do that (see A3/A4 below).
+- **Prefer `twitter user-posts @handle -n 20` over `twitter search`** for
+  polling tracked tipster accounts. The repo's own reference
+  (`references/social.md`) flags `search` as unstable — X changes its
+  GraphQL endpoint often enough that it can 404 — while `feed`,
+  `tweet`, `user-posts`, and `user` are the "stable commands." Since our
+  use case is "poll a known list of tipster handles," not open-ended
+  search, we can build entirely on the stable path.
+- IP risk: the repo warns against frequent calls from a VPS/datacenter
+  IP, especially `followers`/`following` (we don't need those). A
+  residential proxy (Webshare, ~$1/month, referenced by the repo) reduces
+  ban risk; budget for it.
+- Poll tracked handles. Record `posted_at` from the tool and
+  `captured_at` ourselves. A consistently large gap between them means
+  the polling interval is too slow to catch pre-kickoff tips, which
+  silently corrupts the §7 gradeability rule — track this as a
+  data-quality signal, not just a debugging curiosity.
 
-### Facebook — deprioritized
-- No usable public read API for arbitrary Pages/Groups; scraping is
-  against ToS and heavily defended.
+### Reddit — no zero-config path exists; confirmed independently
+The original plan (PRAW, self-service script app) is dead for anyone who
+doesn't already hold Reddit API credentials, and this was checked two
+ways, not just taken from the Agent Reach README:
+
+1. `agent_reach/channels/reddit.py`'s own docstring says, live-verified
+   2026-06: anonymous `.json` endpoints are 403-blocked, and Reddit
+   closed self-service API registration in November 2025 (manual
+   approval only; individual scripts are rarely granted).
+2. An independent web search (2026-08) corroborates this: Reddit
+   replaced self-service OAuth registration with a "Responsible Builder
+   Policy" in late 2025 — any new token needs prior approval through a
+   ticket form, and personal/script-app use cases are not the kind that
+   gets approved.
+
+**Conclusion: do not build the Reddit adapter on PRAW.** Use Agent
+Reach's Reddit channel instead, which has two backends:
+
+- **OpenCLI** — reuses an already-logged-in desktop Chrome session.
+  Confirmed **not viable for us**: it requires a live desktop browser,
+  which a GitHub Actions runner or headless worker doesn't have. This is
+  the repo's own recommended *first* backend, but only for desktop users.
+- **rdt-cli** — the only backend that actually works headless. Install
+  from GitHub, pinned, **not PyPI** (PyPI is behind):
+  `pipx install 'git+https://github.com/public-clis/rdt-cli.git@5e4fb3720d5c174e976cd425ccc3b879d52cac66'`
+  (this exact pin is read directly from `_RDT_GIT_SOURCE` in
+  `agent_reach/channels/reddit.py`, confirmed matching `doctor`'s own
+  install hint). Auth is a manually-written cookie file
+  (`~/.config/rdt-cli/credential.json`, containing the `reddit_session`
+  cookie value from Cookie-Editor) — there's no automated login path on
+  a server. Agent Reach tracks this credential's age and treats it as
+  stale after 7 days.
+- **Known risk on top of the ToS issue: `rdt-cli` itself is
+  unmaintained** — the repo's own docs say upstream stopped updating it
+  in March 2026. This is a legacy/fallback tool by the maintainer's own
+  description, not a first-class one. Treat it as more fragile than
+  `twitter-cli` and expect to revisit this adapter sooner.
+- Either way, capture the `edited` state once available. The main
+  brief's rule holds: a tip edited after kickoff is disqualified.
+- Expect to need the same residential proxy as X — the repo explicitly
+  calls out server IPs getting blocked on Reddit.
+
+### Facebook / Instagram — still deprioritized, confirmed correctly so
+Agent Reach's own docs are explicit that Facebook and Instagram route
+through OpenCLI only, reusing a live desktop Chrome session logged into
+facebook.com/instagram.com, and **do not recommend this for servers or
+headless environments.** Read directly:
+`agent_reach/channels/facebook.py` has exactly one backend, `OpenCLI`,
+with no alternative. This confirms rather than changes the main brief's
+call to deprioritize Facebook.
+
 - Adapter interface defined, left unimplemented. Manual-paste fallback
   in the admin screen instead. Do not spend session time on bot
-  detection.
+  detection or on making OpenCLI work headless — the repo's own authors
+  say not to.
+- If a specific Facebook tipster later proves worth the effort, revisit
+  it as a separate desktop-attached collector, not part of the cloud
+  pipeline.
+
+### Agent Reach — verified findings (2026-08-12)
+
+Agent Reach is an installer/router/health-checker, not a library: the
+`AgentReach` Python class only does health checks. The actual reading is
+done by separate CLIs it installs (`twitter`, `rdt`, `opencli`, `yt-dlp`,
+`gh`, `mcporter`). Adapters shell out to those and parse stdout — see
+`cli_runner.py` in A2 below.
+
+- **Pinned commit:** `93ae1d18c37b707dec053c7c4f9d91cd8ef8943d` (`main`
+  as of 2026-08-12). Do not track `main`; bump this deliberately when a
+  session verifies the new commit against the checks below.
+- **Correct install — this matters, it was wrong in the version briefed
+  to this session:** `pip install agent-reach` installs a **different,
+  unrelated PyPI package** — `agent-reach` 0.1.0 by Jean Galea
+  (`github.com/jgalea/agent-reach`), a name collision with an entirely
+  different CLI (`{list,install,remove,doctor,get,skill,cache}` instead
+  of the expected `{setup,install,configure,doctor,uninstall,skill,...}`).
+  This was caught by actually installing it and diffing the `--help`
+  output against the repo's docs, not assumed. **Use the pinned Git
+  install instead**, confirmed working:
+  ```bash
+  pip install "git+https://github.com/Panniantong/agent-reach.git@93ae1d18c37b707dec053c7c4f9d91cd8ef8943d"
+  ```
+  (`pipx` in place of `pip` for an isolated install, same syntax.)
+- **`agent-reach doctor --json` schema — confirmed by running it, not
+  guessed.** Top-level object keyed by platform slug
+  (`"twitter"`, `"reddit"`, `"facebook"`, …), each value:
+  ```json
+  {
+    "status": "ok" | "warn" | "off" | "error",
+    "name": "<display name>",
+    "message": "<human-readable status/instructions>",
+    "tier": 0 | 1 | 2,
+    "backends": ["<backend name>", ...],
+    "active_backend": "<backend name>" | null
+  }
+  ```
+  Observed status semantics, confirmed against a real run with nothing
+  configured:
+  - `off` — no backend installed at all for that platform.
+  - `warn` — a backend is installed, but not live-verified. **Important:
+    for login-backed platforms (twitter, reddit, facebook, …),
+    `active_backend` is `null` even once credentials are correctly
+    configured** — `doctor` deliberately never runs the upstream
+    liveness check (`twitter status`, etc.) because that check falls
+    back to reading a live browser session on failure, which would
+    violate the Cookie-Editor-only policy. **A null `active_backend` on
+    these platforms is normal, not a failure signal** — this is why A3's
+    preflight gate can't just check `active_backend is not null`; see A4.
+  - `ok` — verified working (observed for `rss`/`feedparser` and
+    `yt-dlp` once its JS runtime was configured).
+  - `error` — installed but broken.
+- **`agent-reach configure twitter-cookies --stdin` is real** — confirmed
+  via `agent-reach configure --help`. Non-interactive credential storage
+  for CI is possible; never pass the cookie value as a positional
+  argument (`--stdin` exists specifically to avoid that).
 
 ### Odds and results — the settlement backbone
 Without reliable results there is no scoring and the product is
@@ -74,6 +212,131 @@ worthless.
   claimed were actually available. Claimed-odds inflation is rampant —
   if they say 2.10 and the market was 1.72, score them at 1.72.
 - Cache aggressively. These are metered.
+
+## Ingestion architecture — where Agent Reach sits
+
+Agent Reach and its upstream CLIs live **only in the ingestion layer**.
+Nothing downstream of `posts` knows they exist.
+
+```
+                    ┌─ Telegram ──── Telethon (persistent worker)
+                    │
+ingestion adapters ─┼─ X ─────────── twitter-cli   ┐
+                    │                              ├─ installed & health-checked
+                    ├─ Reddit ─────── rdt-cli      ┘   by Agent Reach
+                    │
+                    └─ Facebook ───── manual paste (unimplemented adapter)
+                                │
+                                ▼
+                    normalize → posts table (captured_at set by us)
+                                │
+                                ▼
+                    extraction → selections → settlement → scoring → slips
+```
+
+Every adapter — Telegram included — implements the same `SourceAdapter`
+interface and emits the same normalized `RawPost` shape regardless of
+which CLI produced it. If Agent Reach is later dropped or a backend
+changes, only the adapter layer moves.
+
+### Subprocess contract
+
+The upstream CLIs (`twitter`, `rdt`, `opencli`) are third-party binaries
+producing text, not a library with a stable interface. Every adapter goes
+through one shared runner, `backend/ingestion/cli_runner.py`, which must:
+
+- **Pass credentials via the child process environment only** — never in
+  argv, which is visible in process listings. Twitter needs
+  `TWITTER_AUTH_TOKEN` / `TWITTER_CT0` explicitly in the child env; the
+  parent process's own env is never mutated.
+- **Never log credential values.** Redact them from any captured stderr
+  before it reaches logs, with a test proving it.
+- **Hard timeout on every call** (start at 120s) — these tools hang.
+- **Capture stdout and stderr separately.** Never parse stderr as data.
+- **Prefer structured output** — `-f yaml` / `--json` where offered.
+- **Treat exit code 0 with empty output as a failure**, not an empty
+  result set. Silent cookie expiry looks exactly like "no new posts,"
+  and that failure mode will quietly poison scoring data if it's not
+  caught here.
+- **Retry with backoff** following the retry chains in
+  `agent_reach/skill/references/social.md` — e.g. Twitter search's
+  documented chain is: retry once → `pipx upgrade twitter-cli` and retry
+  → fall back to stable commands (`feed`, `user-posts`). Never improvise
+  a different chain.
+- **Write only to `/tmp/` and `~/.agent-reach/`**, per the repo's own
+  workspace rule.
+
+Parser tests run against real captured payloads committed to
+`fixtures/`, captured once by hand and never regenerated in CI.
+
+### Doctor as a hard preflight gate
+
+Every ingestion run calls `agent-reach doctor --json` first (schema
+confirmed above) and parses it before doing anything else.
+
+- A platform whose `status` is `off` or `error` is **skipped for that
+  run and recorded as a skip** — never treated as "no posts found."
+- A platform whose `status` is `warn` (the normal state for
+  correctly-configured login-backed platforms — see the `active_backend`
+  note above) proceeds, but only after our **own liveness probe**: one
+  cheap read against a known-good target, requiring non-empty content,
+  since `doctor` explicitly does not verify credentials still work.
+- Persist doctor output per run in an `ingestion_health` table:
+  timestamp, platform, `status`, `active_backend`, message.
+- **Surface degradation in the app.** If X has been unhealthy for 24
+  hours, the Tipsters screen must say so — otherwise a source's apparent
+  silence is indistinguishable from cookie expiry, and its score drifts
+  on stale data while looking fine.
+
+### Credential lifecycle
+
+Cookie-based access degrades silently, so expiry is treated as an
+expected event, not an incident:
+
+- All credentials in GitHub secrets, nothing in the repo, with a
+  secret-scanning pre-commit hook.
+- `docs/RUNBOOK.md` (Task A6) documents re-exporting cookies with
+  Cookie-Editor and verifying with `doctor`, written for a phone.
+- When `doctor` reports a platform unhealthy two runs in a row, the
+  Actions workflow opens a GitHub issue automatically.
+- Track credential age in `ingestion_health` and warn ahead of the
+  observed typical expiry window once there's data to establish one.
+
+### Accepted risks
+
+- **This is cookie-based access, against X's and Reddit's ToS.** Use
+  burner accounts, not real ones — the account can be banned.
+- **A leaked `TWITTER_AUTH_TOKEN` + `TWITTER_CT0` pair is full account
+  takeover**, no password needed. GitHub secrets only, never logged,
+  never in argv.
+- A residential proxy (Webshare, ~$1/month) is budgeted for, since the
+  repo documents server IPs getting blocked on both Reddit and X.
+
+### Scheduling
+
+- **Telegram worker:** continuous, on the persistent host — unchanged.
+- **X and Reddit polls:** GitHub Actions cron, every 10 minutes during
+  match hours, hourly overnight. A tip captured after kickoff is
+  worthless under §7's gradeability rule, so the poll interval has to
+  outrun pre-match posting, not just eventually catch up.
+- Agent Reach and the upstream CLIs install in a cached workflow step —
+  cold-installing on every run burns Actions minutes for no reason.
+- `doctor` runs first, in the same job, and the job fails loudly on a
+  total outage.
+
+### Task order for this amendment
+
+| # | Task | Status |
+|---|---|---|
+| A1 | Read the repo, write findings here, pin the SHA | Done, this PR |
+| A2 | `cli_runner.py` + credential redaction + timeout handling, with tests | Next |
+| A3 | Doctor preflight + `ingestion_health` table + skip-vs-warn distinction | |
+| A4 | X adapter via `twitter-cli`, with liveness probe | |
+| A5 | Reddit: `rdt-cli` adapter (official-API path confirmed unavailable, see above) | |
+| A6 | `docs/RUNBOOK.md` + automatic issue-on-failure | |
+| A7 | Health surfacing in the mobile app | |
+
+Facebook stays unimplemented. Telegram is unaffected by this amendment.
 
 ## Data model (Postgres)
 
