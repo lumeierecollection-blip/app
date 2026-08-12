@@ -329,12 +329,44 @@ expected event, not an incident:
 | # | Task | Status |
 |---|---|---|
 | A1 | Read the repo, write findings here, pin the SHA | Done, this PR |
-| A2 | `cli_runner.py` + credential redaction + timeout handling, with tests | Next |
-| A3 | Doctor preflight + `ingestion_health` table + skip-vs-warn distinction | |
-| A4 | X adapter via `twitter-cli`, with liveness probe | |
-| A5 | Reddit: `rdt-cli` adapter (official-API path confirmed unavailable, see above) | |
+| A2 | `cli_runner.py` + credential redaction + timeout handling, with tests | Done, this PR |
+| A3 | Doctor preflight + `ingestion_health` table + skip-vs-warn distinction | Next |
+| A4 | X adapter via `twitter-cli`, with liveness probe | Blocked — needs a burner X account + Cookie-Editor cookies |
+| A5 | Reddit: `rdt-cli` adapter (official-API path confirmed unavailable, see above) | Blocked — needs a burner Reddit account + cookies |
 | A6 | `docs/RUNBOOK.md` + automatic issue-on-failure | |
 | A7 | Health surfacing in the mobile app | |
+
+### A2 — `backend/ingestion/cli_runner.py`
+
+Implemented as the one shared entry point every adapter uses to shell out
+to an upstream CLI:
+
+- `run(argv, env_overrides=..., timeout=..., allow_empty_output=...)` —
+  one invocation. Credentials are merged into the child's environment
+  only (`{**os.environ, **env_overrides}`); the current process's own
+  `os.environ` is never mutated. stderr is redacted against every
+  credential value before it can reach a log line or an exception
+  message. Raises `CliTimeoutError` on timeout, `CliCommandError` on a
+  non-zero exit, and `CliEmptyOutputError` on exit 0 with empty stdout
+  (the silent-expiry failure mode) unless the caller opts out for a
+  command it knows can legitimately return nothing.
+- A defensive check, `_assert_no_secrets_in_argv`, rejects the call before
+  spawning anything if a credential value appears in `argv` — this caught
+  a real bug in the module's own first test draft (a secret value had
+  been embedded directly in a test script's source instead of read back
+  from the child's env at runtime), which is exactly the mistake this
+  check exists to catch.
+- `run_with_retry(...)` retries the *same* command with exponential
+  backoff — this is only the "retry once" opening step common to every
+  documented retry chain in `references/social.md`. A chain that falls
+  back to a *different* command (Twitter search's documented chain:
+  retry → `pipx upgrade twitter-cli` && retry → fall back to
+  `feed`/`user-posts`) is adapter-specific and composed from multiple
+  `run()` calls in Task A4/A5, not encoded generically here.
+- Tests (`backend/ingestion/tests/test_cli_runner.py`) spawn real child
+  processes (`python3 -c "..."`) rather than mocking `subprocess.run`, so
+  the timeout, env-injection, and redaction behavior is proven against an
+  actual OS process. Run with `cd backend && python3 -m pytest`.
 
 Facebook stays unimplemented. Telegram is unaffected by this amendment.
 

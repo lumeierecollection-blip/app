@@ -19,11 +19,17 @@ rather than trusting the source brief:
   headless/server pipeline — only `rdt-cli` is, and it's unmaintained
   upstream since March 2026.
 
+**Amendment A2 — `backend/ingestion/cli_runner.py`, the shared subprocess
+runner every ingestion adapter will use.** Complete, this PR. Credential
+redaction, env-only credential injection, timeout handling, exit-0-empty
+treated as failure, and same-command retry-with-backoff, all covered by
+tests that spawn real child processes rather than mocking `subprocess`.
+Run with `cd backend && python3 -m pytest`.
+
 Next up: **Task 1 — Postgres schema + migrations + Telegram ingest for 3
-channels, with capture-time snapshotting proven**, then **Amendment
-tasks A2–A7** (subprocess runner, doctor preflight, X/Reddit adapters,
-runbook, mobile health surfacing) per the task table in
-`docs/ARCHITECTURE.md`.
+channels, with capture-time snapshotting proven**, then **Amendment A3**
+(doctor preflight + `ingestion_health` table). A4/A5 (the actual X and
+Reddit adapters) stay blocked until the resources below are in hand.
 
 ## What works
 
@@ -41,9 +47,9 @@ runbook, mobile health surfacing) per the task table in
 
 ## What's stubbed
 
-- Everything code-wise. `backend/` and `mobile/` are empty directories —
-  no code yet. Both Task 0 and Amendment Task A1 deliberately ship no
-  feature code, research and scaffolding only.
+- `mobile/` is still an empty directory — no code yet (Task 7/8).
+- `backend/` has only `ingestion/cli_runner.py` so far (Amendment A2).
+  No models, no API, no other adapters yet.
 
 ## What's blocked
 
