@@ -75,6 +75,9 @@ def main() -> int:
     )
     fixtures = resp.body.get("response", [])
     print(f"Fixtures found (no season param, 90-day window): {len(fixtures)}")
+    print(f"errors field: {resp.body.get('errors')!r}")
+    print(f"results field: {resp.body.get('results')!r}")
+    print(f"paging field: {resp.body.get('paging')!r}")
     for f in fixtures[:10]:
         fx = f.get("fixture", {})
         teams = f.get("teams", {})
@@ -92,6 +95,25 @@ def main() -> int:
         )
         fixtures = resp.body.get("response", [])
         print(f"Fixtures found (season={season}): {len(fixtures)}")
+        print(f"errors field: {resp.body.get('errors')!r}")
+        print(f"results field: {resp.body.get('results')!r}")
+
+    # Sanity check: does the fixtures endpoint work at all on this key/plan
+    # for *any* league, or is the restriction specific to top European
+    # leagues like the Premier League? Belarus (id=116, seen above) has
+    # full coverage flags (events/lineups/statistics all True) so is a
+    # reasonable free-tier control.
+    control_league_id = 116
+    print(f"\n=== Control: league {control_league_id} (Belarus Premier League), season={today.year} ===")
+    resp = get_json(
+        f"{BASE_URL}/fixtures?league={control_league_id}&season={today.year}"
+        f"&from={wide_from.isoformat()}&to={wide_to.isoformat()}",
+        headers=headers,
+    )
+    fixtures = resp.body.get("response", [])
+    print(f"Fixtures found: {len(fixtures)}")
+    print(f"errors field: {resp.body.get('errors')!r}")
+    print(f"results field: {resp.body.get('results')!r}")
 
     return 0
 
