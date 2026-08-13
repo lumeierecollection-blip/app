@@ -8,8 +8,10 @@
 now on hold behind `sources.social.enabled` (default off).** Not
 abandoned — Amendment B (below) demoted the whole tipster-social premise
 from primary to optional, deferred until the odds-market path works end
-to end. A1's research findings and A2's `backend/ingestion/cli_runner.py`
-stay in the repo as reusable infra.
+to end. A1's research findings and A2's `deferred_social/cli_runner.py`
+(moved here from `backend/ingestion/cli_runner.py` when `backend/` was
+rewritten to Node.js — see the Amendment D entry below) stay in the repo
+as reusable infra.
 
 **Amendment B (odds-market path) — this is the current, primary plan.**
 Real tips without socials: compute a fair price from a sharp reference
@@ -332,6 +334,77 @@ pricing already does better.
     of `build-apk.yml` on this branch to see whether the Kotlin DSL fix
     actually holds.
 
+**Amendment D (Prompt 8) — backend retired and rebuilt as plain Node.js +
+Supabase + Cloud Run, replacing the FastAPI + self-run-Postgres plan
+(Tasks D1–D9).** The user's brief was verified against the real
+`tradeapp/signal_aggregator/server` before porting anything — cloned and
+read directly (package.json's single dependency, `server.js`'s
+`cache.running`/`scanChain` pattern, the exact Cloud Run deploy commands
+in its README), not assumed from the brief's description alone. The old
+`backend/` (Python, 179 tests, B1–B6) was removed with `git rm` — fully
+recoverable from git history, not actually lost — and rebuilt fresh.
+
+- **D1 — scaffold.** `backend/` now mirrors `tradeapp/server/`'s shape
+  exactly: `server.js`, `lib/*.js` (one file per concern), `test/*.test.js`,
+  `Dockerfile`, `package.json`, `README.md`. One real dependency
+  (`@supabase/supabase-js`, vs. `tradeapp`'s one dependency,
+  `firebase-admin`, for a different reason). `node --test` for tests, no
+  framework — `package.json`'s test script deviates from `tradeapp`'s
+  literal `node --test test/` to bare `node --test`, found necessary by an
+  actual local run: `node --test test/` failed to resolve the directory as
+  a test path on this Node version (v22.22.2), while bare `node --test`'s
+  default discovery works — a real, verified fix, not copied blind.
+- **D2 — ported math, same spec.** `lib/devig.js`, `edge.js`,
+  `settlement.js`, `scoring.js`, `manualCheck.js`, `odds.js`, `fixtures.js`
+  are direct ports of the retired Python modules (recovered from git
+  history for accuracy, not rebuilt from memory). 114 tests passing
+  (`npm test`), including every quarter-line settlement case and the
+  OddsPapi parser replayed against the same real captured B1b payload
+  (`fixtures/provider_probes/oddspapi_odds_pinnacle.json`) the Python
+  tests used. **One real bug found and fixed during the port, not carried
+  forward:** the Python OddsPapi parser labeled 1X2 outcomes as market
+  `"h2h"`, while Python settlement's `MARKET_RULES` (built later, Task B6)
+  keyed on `"moneyline"` for the same market — the two never actually
+  connected in the original codebase (B2's one live run found zero
+  fixtures, so nothing ever exercised settlement against a real quote).
+  Fixed in the port: `lib/odds.js` now classifies 1X2 outcomes as
+  `"moneyline"`, matching every other module.
+- **D3 — Supabase.** `backend/supabase/migrations/20260813000001_schema.sql`:
+  the same tables as the retired Postgres schema, consolidated into one
+  migration (no incremental history to preserve on a fresh start),
+  `payout_fraction` included from the start rather than bolted on later.
+  Three Postgres functions (`finalize_closing_lines`,
+  `find_pending_selections`, `load_settled_selections_for_strategy`)
+  handle the queries — correlated subqueries and anti-joins — the
+  Supabase JS client's query builder can't express directly. RLS
+  deliberately left off: single-user app, service-role key from a trusted
+  backend only, documented as a conscious choice in the migration's own
+  comment. **Not live-tested against a real Supabase project** — this
+  sandbox has no Supabase credentials; `lib/supabase.js` is verified to
+  load correctly and fail loudly (not silently) when credentials are
+  missing, but every actual query is unverified against a real database.
+- **D4/D5 — scan loop + API handlers, real and running.** `server.js`
+  mirrors `tradeapp/server.js`'s structure closely: `cache.running`-guarded
+  `scan()`, `setInterval` on `SCAN_INTERVAL_MS`, the same `setCors`/`json`/
+  `readJsonBody` helpers. **Actually started and hit locally** (not just
+  syntax-checked): `/api/health` and the root endpoint respond correctly,
+  and — with no Supabase/provider credentials set — `/api/status` shows
+  the scan failing gracefully into `lastScanError` instead of crashing the
+  process, real verified behavior matching the "never silently fail"
+  standard the rest of this project holds to.
+- **D6/D7 — deploy + repoint Flutter. Blocked on real credentials this
+  session doesn't have** (no GCP account, no Supabase project) — cannot be
+  completed without the user provisioning both and either running the
+  `gcloud run deploy` command themselves or handing over credentials.
+  **D7 required a real fix, not just "point at the URL" as the brief
+  assumed:** the Flutter app's `api_client.dart` was built against the
+  retired FastAPI backend's paths and snake_case JSON
+  (`/manual-check`, `fixture_id`, `entered_odds`) — the brief's claim that
+  it "already expects" the new backend's shape didn't hold. Updated to the
+  real `server.js` paths (`/api/health`, `/api/manual-check`,
+  `/api/manual-check/fair-price`) and camelCase fields
+  (`fixtureId`, `offeredOdds`, `fairPrices`) to actually match.
+
 ## What works
 
 - Repo skeleton exists: `CLAUDE.md`, `docs/`, `.claude/skills/`,
@@ -345,7 +418,7 @@ pricing already does better.
   auto-discovered by Claude Code.
 - Deferred social path: Agent Reach's real `doctor --json` schema and
   correct pinned-install command are verified (not guessed) and recorded
-  in `docs/ARCHITECTURE.md`. `backend/ingestion/cli_runner.py` (11
+  in `docs/ARCHITECTURE.md`. `deferred_social/cli_runner.py` (11
   passing tests) is built and ready for whenever A3+ resumes.
 - **Odds-market path (B2), locally proven** (`cd backend &&
   DATABASE_URL=postgresql://... python3 -m pytest`): schema + migrations,

@@ -2,12 +2,13 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
-/// Talks to the FastAPI backend (backend/api/main.py). The base URL is
-/// injected at build time via `--dart-define=API_BASE_URL=...` -- the
-/// Flutter/dart-define equivalent of the original Expo-era
-/// `EXPO_PUBLIC_API_URL` convention docs/ARCHITECTURE.md flagged as
-/// "decide and record here when B7 starts." Decided and recorded here:
-/// `API_BASE_URL`, read via `--dart-define`, wired through
+/// Talks to the plain Node.js backend (backend/server.js, Prompt 8 --
+/// replaced the earlier FastAPI backend this client originally targeted;
+/// paths and JSON field names below match server.js's actual routes and
+/// camelCase response shape, not snake_case). The base URL is injected at
+/// build time via `--dart-define=API_BASE_URL=...` -- the Flutter/dart-define
+/// equivalent of the original Expo-era `EXPO_PUBLIC_API_URL` convention,
+/// decided and recorded in docs/ARCHITECTURE.md, wired through
 /// .github/workflows/build-apk.yml.
 ///
 /// Demo mode is removed per Amendment B7 -- there is no fallback data. A
@@ -30,9 +31,9 @@ class FairPrice {
   final Map<String, double> fairPrices;
 
   factory FairPrice.fromJson(Map<String, dynamic> json) {
-    final rawPrices = json['fair_prices'] as Map<String, dynamic>;
+    final rawPrices = json['fairPrices'] as Map<String, dynamic>;
     return FairPrice(
-      fixtureId: json['fixture_id'] as String,
+      fixtureId: json['fixtureId'] as String,
       market: json['market'] as String,
       fairPrices: rawPrices.map((k, v) => MapEntry(k, (v as num).toDouble())),
     );
@@ -61,11 +62,11 @@ class ManualCheckResult {
   factory ManualCheckResult.fromJson(Map<String, dynamic> json) {
     return ManualCheckResult(
       id: json['id'] as String,
-      fairProbability: (json['fair_probability'] as num).toDouble(),
-      fairOdds: (json['fair_odds'] as num).toDouble(),
+      fairProbability: (json['fairProbability'] as num).toDouble(),
+      fairOdds: (json['fairOdds'] as num).toDouble(),
       edge: (json['edge'] as num).toDouble(),
-      stakeFraction: (json['stake_fraction'] as num?)?.toDouble(),
-      passedGates: json['passed_gates'] as bool,
+      stakeFraction: (json['stakeFraction'] as num?)?.toDouble(),
+      passedGates: json['passedGates'] as bool,
       rejections: (json['rejections'] as List).cast<String>(),
     );
   }
@@ -80,13 +81,13 @@ class ApiClient {
   Uri _uri(String path, [Map<String, String>? query]) => Uri.parse('$baseUrl$path').replace(queryParameters: query);
 
   Future<bool> checkHealth() async {
-    final response = await _client.get(_uri('/health'));
+    final response = await _client.get(_uri('/api/health'));
     return response.statusCode == 200;
   }
 
   Future<FairPrice> fetchFairPrice({required String fixtureId, required String market}) async {
     final response = await _client.get(
-      _uri('/manual-check/fair-price', {'fixture_id': fixtureId, 'market': market}),
+      _uri('/api/manual-check/fair-price', {'fixture': fixtureId, 'market': market}),
     );
     if (response.statusCode != 200) {
       throw ApiException(response.statusCode, response.body);
@@ -103,14 +104,14 @@ class ApiClient {
     double? line,
   }) async {
     final response = await _client.post(
-      _uri('/manual-check'),
+      _uri('/api/manual-check'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
-        'fixture_id': fixtureId,
+        'fixture': fixtureId,
         'market': market,
         'pick': pick,
-        'entered_odds': enteredOdds,
-        'entered_bookmaker': enteredBookmaker,
+        'offeredOdds': enteredOdds,
+        'bookmaker': enteredBookmaker,
         if (line != null) 'line': line,
       }),
     );

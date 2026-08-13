@@ -351,7 +351,7 @@ changes, only the adapter layer moves.
 
 The upstream CLIs (`twitter`, `rdt`, `opencli`) are third-party binaries
 producing text, not a library with a stable interface. Every adapter goes
-through one shared runner, `backend/ingestion/cli_runner.py`, which must:
+through one shared runner, `deferred_social/cli_runner.py`, which must:
 
 - **Pass credentials via the child process environment only** — never in
   argv, which is visible in process listings. Twitter needs
@@ -451,7 +451,7 @@ working end to end and there's a reason to re-enable
 | A6 | `docs/RUNBOOK.md` + automatic issue-on-failure | On hold (Amendment B) |
 | A7 | Health surfacing in the mobile app | On hold (Amendment B) — superseded by B7's Health screen, which reports odds-market quota/staleness instead |
 
-### A2 — `backend/ingestion/cli_runner.py`
+### A2 — `deferred_social/cli_runner.py`
 
 Implemented as the one shared entry point every adapter uses to shell out
 to an upstream CLI:
@@ -478,7 +478,7 @@ to an upstream CLI:
   retry → `pipx upgrade twitter-cli` && retry → fall back to
   `feed`/`user-posts`) is adapter-specific and composed from multiple
   `run()` calls in Task A4/A5, not encoded generically here.
-- Tests (`backend/ingestion/tests/test_cli_runner.py`) spawn real child
+- Tests (`deferred_social/tests/test_cli_runner.py`) spawn real child
   processes (`python3 -c "..."`) rather than mocking `subprocess.run`, so
   the timeout, env-injection, and redaction behavior is proven against an
   actual OS process. Run with `cd backend && python3 -m pytest`.

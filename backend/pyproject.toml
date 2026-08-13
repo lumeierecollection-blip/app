@@ -1,3 +1,0 @@
-[tool.pytest.ini_options]
-pythonpath = ["."]
-testpaths = ["ingestion/tests", "ingestion/odds/tests", "db/tests", "pricing/tests", "manual_check/tests", "scoring/tests", "settlement/tests"]

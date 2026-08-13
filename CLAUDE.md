@@ -88,7 +88,20 @@ worker.
 
 ### Backend
 
-| Layer | Choice | Notes |
+**Amendment D (Prompt 8) — plain Node.js + Supabase + Cloud Run, replacing
+the Python/FastAPI/self-run-Postgres plan below.** Matched to
+[`lumeierecollection-blip/tradeapp`](https://github.com/lumeierecollection-blip/tradeapp)'s
+`signal_aggregator/server` (verified by reading the real repo, not assumed):
+no framework, one file per concern, `node --test` with no test-framework
+dependency, an in-memory cache refreshed by a self-scheduled scan loop, and
+a Docker + Cloud Run deploy path from the browser (Google Cloud Shell, free
+tier). See `backend/README.md` for the real, current stack — this table is
+kept below as a historical record of what B1–B7 were actually built
+against, since that work (the math, the schema, the settlement rules) all
+carried over into the Node port largely unchanged; only the delivery
+mechanism (language, framework, self-run vs. managed Postgres) changed.
+
+| Layer | Choice (superseded, kept for history) | Notes |
 |---|---|---|
 | Language | Python 3.11 | |
 | Polled ingestion | GitHub Actions cron | Odds, fixtures, results (Reddit/X deferred — see Data sources) |
@@ -98,6 +111,18 @@ worker.
 | API | FastAPI + Pydantic v2 | |
 | Extraction | Anthropic API, `claude-sonnet-4-6` | Structured JSON from unstructured posts |
 | Secrets | GitHub Actions secrets + host env | Never in repo |
+
+**Current (Amendment D):**
+
+| Layer | Choice | Notes |
+|---|---|---|
+| Language | Node.js ≥20, plain `node:http` | No framework — matches `tradeapp/server.js` exactly |
+| Scan loop | Self-scheduled `setInterval`, `SCAN_INTERVAL_MS` | Guarded against overlap (`cache.running`), same as `tradeapp`'s `scanChain` pattern |
+| Database | Supabase (hosted Postgres) | Never self-run; service-role key from the backend only. Schema: `backend/supabase/migrations/` |
+| API | Plain `http.createServer` handlers | `/api/slips`, `/api/strategies`, `/api/manual-check`, `/api/health`, `/api/status`, `/refresh` |
+| Testing | `node --test`, no dependency | `npm test` runs `node --test` (see `backend/package.json` for the one deviation from `tradeapp`'s literal script, found and fixed by a real local test run) |
+| Deploy | Docker + Google Cloud Run | Free tier, deployed from Cloud Shell in the browser — no local install. `--max-instances 1`, scales to zero when idle |
+| Secrets | Cloud Run env vars (`--set-env-vars`) | Never inline in shared shell history |
 
 ### Mobile
 
@@ -182,7 +207,11 @@ default off):**
 - **Agent Reach** stays pinned to a commit SHA in `docs/ARCHITECTURE.md`
   — never tracks `main`. `pip install agent-reach` installs an unrelated
   package (name collision on PyPI); the pinned Git install is correct.
-- `backend/ingestion/cli_runner.py` (Amendment A2) is built and stays —
+- `deferred_social/cli_runner.py` (Amendment A2, moved from
+  `backend/ingestion/cli_runner.py` when `backend/` was rewritten to
+  Node.js per Amendment D — still Python, deliberately, since it wraps
+  Python-CLI subprocess management independent of the primary backend's
+  language) is built and stays —
   it's the shared subprocess runner this path will use whenever it's
   re-enabled.
 - Budget for a residential proxy (Webshare, ~$1/month) if/when this path
