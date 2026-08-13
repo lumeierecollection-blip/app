@@ -123,7 +123,7 @@ class _ManualCheckScreenState extends State<ManualCheckScreen> {
           ),
           if (_fairPrice != null) ...[
             const SizedBox(height: 16),
-            Text('Fair prices (sharp book, de-vigged)', style: AppType.label),
+            const Text('Fair prices (sharp book, de-vigged)', style: AppType.label),
             const SizedBox(height: 8),
             for (final entry in _fairPrice!.fairPrices.entries)
               Padding(
@@ -182,7 +182,7 @@ class _ManualCheckResultCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Rejected by sanity gates', style: AppType.statNumber),
+              const Text('Rejected by sanity gates', style: AppType.statNumber),
               const SizedBox(height: 8),
               for (final reason in result.rejections) Text('- $reason', style: AppType.body),
             ],

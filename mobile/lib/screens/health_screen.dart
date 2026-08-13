@@ -80,7 +80,7 @@ class _HealthScreenState extends State<HealthScreen> {
             ),
           ),
           const SizedBox(height: 16),
-          Text(
+          const Text(
             'Ingestion poll status, API quota consumed, and sharp-line staleness per '
             'competition aren\'t wired up yet -- those need dedicated backend endpoints '
             'this task hasn\'t built. This check only confirms the API is reachable.',

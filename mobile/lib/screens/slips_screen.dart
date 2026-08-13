@@ -30,13 +30,13 @@ class SlipsScreen extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(
+              const Text(
                 'No slips built yet.',
                 style: AppType.statNumber,
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 8),
-              Text(
+              const Text(
                 'A slip only forms from strategies with 50+ settled selections and a positive '
                 'roi_ci_low -- see the Health tab for how close any strategy is. In the meantime, '
                 'check a real price against the sharp line yourself:',

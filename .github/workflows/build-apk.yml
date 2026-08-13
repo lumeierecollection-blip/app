@@ -65,7 +65,7 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Set up Python (for the build.gradle signing patch)
+      - name: Set up Python (for the build.gradle.kts signing patch)
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -109,8 +109,8 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
 
-      - name: Wire release signing into build.gradle
-        run: python3 scripts/patch_android_signing.py mobile/android/app/build.gradle
+      - name: Wire release signing into build.gradle.kts
+        run: python3 scripts/patch_android_signing.py mobile/android/app/build.gradle.kts
 
       - name: Build release APK (fix #2 -- real build number)
         working-directory: mobile

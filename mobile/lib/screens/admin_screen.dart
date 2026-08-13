@@ -27,8 +27,8 @@ class AdminScreen extends StatelessWidget {
             onChanged: (value) => context.read<AppSettings>().setReduceTransparency(value),
           ),
           const Divider(),
-          Padding(
-            padding: const EdgeInsets.all(16),
+          const Padding(
+            padding: EdgeInsets.all(16),
             child: Text(
               'Sources, the team-name alias table, and manual tip paste are part of the '
               'deferred social-tipster path (sources.social.enabled, currently off) and are '

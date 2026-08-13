@@ -14,8 +14,8 @@ class AuditScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Audit')),
-      body: Padding(
-        padding: const EdgeInsets.all(24),
+      body: const Padding(
+        padding: EdgeInsets.all(24),
         child: Text(
           'No accounts audited yet.\n\n'
           'This screen will report what fraction of a claimed-signal account\'s calls '

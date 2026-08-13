@@ -16,9 +16,9 @@ class TipstersScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Tipsters')),
-      body: Center(
+      body: const Center(
         child: Padding(
-          padding: const EdgeInsets.all(24),
+          padding: EdgeInsets.all(24),
           child: Text(
             'No strategies rated yet.\n\nA strategy needs 50 settled selections before it is '
             'rated -- see the Health tab for ingestion status in the meantime.',
