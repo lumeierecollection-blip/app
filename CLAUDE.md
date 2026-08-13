@@ -219,6 +219,10 @@ default off):**
 
 ## Docs map
 
+- `docs/AMENDMENT_E.md` — the no-API path (Prompt 9): Telegram + key-less
+  ESPN data + FCM push on a free cloud host. **Designed, not yet built —
+  the current primary direction.** Read it before the Amendment B sections
+  below if the task is about the server backend or notifications.
 - `docs/ARCHITECTURE.md` — data model, ingestion/extraction/settlement
   pipeline, adapters.
 - `docs/SCORING.md` — the ROI scoring formula, confidence intervals,

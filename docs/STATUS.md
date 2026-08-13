@@ -2,6 +2,53 @@
 
 ## Current position
 
+**Amendment E (Prompt 9) — the no-API path: Telegram + ESPN + FCM push.
+E1 + E2 complete; E3–E8 pending.** The user asked for a cloud backend that
+runs without their PC and pushes a notification when a **trusted** (ROI-rated,
+≥50 settled, positive) provider posts a slip, with **no paid or registered
+APIs**. Full design: `docs/AMENDMENT_E.md`. Key live-confirmed facts behind
+it (verified 2026-08-14, real egress now works from this sandbox):
+
+- **E1 — SQLite store. Done.** `backend/sql/schema.sql` + `backend/lib/store.js`
+  (better-sqlite3, added as the design's first dependency — no longer the
+  zero-dependency promise, flagged in `docs/AMENDMENT_E.md`). Tables:
+  `sources`, `posts`, `selections` (immutable, `gradeable` derived from the
+  §7 captured_at < kickoff rule), `settlements`, `source_scores`,
+  `notifications` (queued/sent/failed audit trail, deduped per post),
+  `ingestion_health`, `app_state` (Telegram StringSession persistence).
+  `settledSelectionsForSource()` returns exactly the shape
+  `scoreStrategy()` consumes. 22 tests.
+  - **Scope call made and recorded here:** `lib/scoring.js`'s
+    `disqualifiersForStrategy` throws on postId-carrying selections (its
+    designed guard against the unwired social path). Amendment E *is* that
+    path, so E5 must implement the post-backed disqualifiers
+    (deleted-post rate, post-kickoff capture rate, claimed-odds inflation,
+    posted-after-result) on the real data. Not done in E1 to keep the
+    proven module untouched — the E1 test asserts the feed shape instead
+    of forcing `scoreStrategy` on it.
+- **E2 — ESPN key-less adapter. Done, live-proven.** `backend/lib/espn.js`:
+  `GET https://site.api.espn.com/apis/site/v2/sports/soccer/<league>/scoreboard[?dates=YYYYMMDD]`
+  — fixtures, full-time results (scores + goal events), and DraftKings
+  odds (moneyline/total/spread with open+close), all normalized to decimal.
+  Defensive: shape changes become nulls/skips, never throws. Live-verified
+  twice this session (eng.1 + usa.1, results and odds). Real captured
+  responses committed under `fixtures/espn/`; 16 tests. Replaces both
+  OddsPapi and API-Football with zero keys. `scripts/verify_espn.js` is the
+  human-triggerable live re-verifier (add `scripts/package.json` to make it
+  ESM-clean).
+- Telegram via grammJS (`telegram` npm), extraction deterministic (no LLM),
+  storage SQLite on Render free tier, notifications via `firebase-admin`
+  FCM. `backend/lib/scoring.js` and `backend/lib/settlement.js` reused
+  unchanged.
+- Known honest gaps, all documented in the amendment: soft-book (not sharp)
+  reference line, 50-bet gate means a quiet phone for weeks, Render free
+  tier sleeps without a heartbeat (UptimeRobot fix documented), Telegram
+  session re-auth on redeploy, text-only extraction (no OCR).
+
+Not started: the backend still runs the retired Amendment B/D odds-market
+server (`backend/server.js`, Supabase, OddsPapi/API-Football keys). Build
+E3–E8 per `docs/AMENDMENT_E.md`'s task table, one PR each.
+
 **Task 0 — repo skeleton + `CLAUDE.md` + docs.** Complete.
 
 **Amendment A (Agent Reach / social ingestion) — A1 and A2 complete, A3–A7
