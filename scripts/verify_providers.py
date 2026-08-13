@@ -55,9 +55,21 @@ def _redact_url(url: str) -> str:
     return re.sub(r"([?&]apiKey=)[^&]+", r"\1[REDACTED]", url)
 
 
+# Default urllib sends "Python-urllib/x.y" as User-Agent, which several
+# providers' Cloudflare WAF rules block outright (observed: OddsPapi
+# returned a Cloudflare "error code: 1010" -- a bot-signature block, not
+# an auth failure -- on the very first live run, before this header was
+# added). A realistic browser-shaped UA is not spoofing identity, it's
+# avoiding a false-positive bot classification for a legitimate API client.
+_DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (compatible; tipster-aggregator-provider-check/1.0)",
+    "Accept": "application/json",
+}
+
+
 def _get_json(url: str, headers: dict[str, str] | None = None) -> tuple[dict, dict]:
     """GET url, return (parsed_json_body, response_headers). Raises ProbeError."""
-    req = urllib.request.Request(url, headers=headers or {})
+    req = urllib.request.Request(url, headers={**_DEFAULT_HEADERS, **(headers or {})})
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             raw = resp.read()
@@ -176,6 +188,25 @@ def probe_odds_provider(api_key: str) -> dict[str, Any]:
     return findings
 
 
+def _scrub_account_pii(value: Any) -> Any:
+    """Recursively drop any "account" key from a JSON-shaped value.
+
+    API-Football's /status endpoint returns real personal data (firstname,
+    lastname, email) in an "account" block alongside the plan/quota info
+    this script actually needs. Confirmed live on the first real run: that
+    block landed unfiltered in a saved fixture and a build artifact before
+    this scrubbing existed. Recursing and dropping the key unconditionally
+    — rather than reconstructing one specific expected shape — means a
+    future change to the response envelope (wrapped, unwrapped, nested
+    differently) can't quietly let the same PII back through.
+    """
+    if isinstance(value, dict):
+        return {k: _scrub_account_pii(v) for k, v in value.items() if k != "account"}
+    if isinstance(value, list):
+        return [_scrub_account_pii(v) for v in value]
+    return value
+
+
 def probe_api_football(api_key: str) -> dict[str, Any]:
     findings: dict[str, Any] = {"provider": "api-football", "errors": []}
     headers_req = {"x-apisports-key": api_key}
@@ -184,6 +215,7 @@ def probe_api_football(api_key: str) -> dict[str, Any]:
     status_url = f"{API_FOOTBALL_BASE}/status"
     try:
         body, headers = _get_json(status_url, headers=headers_req)
+        body = _scrub_account_pii(body)
         _save_probe("api_football_status", {"headers": headers, "body": body})
         findings["account_status"] = body.get("response", body)
     except ProbeError as exc:

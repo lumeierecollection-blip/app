@@ -65,7 +65,16 @@ class FakeProviderHandler(BaseHTTPRequestHandler):
                 }
             ]
         elif parsed.path == "/status":
-            body = {"response": {"requests": {"current": 3, "limit_day": 100}}}
+            # Shaped like the real, live-confirmed response: an "account"
+            # block with the account holder's real name/email sits
+            # alongside the subscription/requests info this script needs.
+            body = {
+                "response": {
+                    "account": {"firstname": "Test", "lastname": "Person", "email": "test@example.com"},
+                    "subscription": {"plan": "Free", "active": True},
+                    "requests": {"current": 3, "limit_day": 100},
+                }
+            }
         elif parsed.path == "/fixtures":
             body = {"response": [{"fixture": {"id": 1}}, {"fixture": {"id": 2}}]}
         elif parsed.path in ODDSPAPI_ROUTES:
@@ -91,11 +100,11 @@ def _start_server() -> HTTPServer:
     return server
 
 
-def test_probe_odds_provider_against_local_server(monkeypatch):
+def test_probe_odds_provider_against_local_server(monkeypatch, tmp_path):
     server = _start_server()
     base = f"http://127.0.0.1:{server.server_port}/v4"
     monkeypatch.setattr(vp, "ODDS_PROVIDER_BASE", base)
-    monkeypatch.setattr(vp, "FIXTURES_DIR", Path("/tmp/verify_providers_test_probes"))
+    monkeypatch.setattr(vp, "FIXTURES_DIR", tmp_path)
 
     try:
         findings = vp.probe_odds_provider("fake-key")
@@ -110,11 +119,11 @@ def test_probe_odds_provider_against_local_server(monkeypatch):
     assert findings["errors"] == []
 
 
-def test_probe_api_football_against_local_server(monkeypatch):
+def test_probe_api_football_against_local_server(monkeypatch, tmp_path):
     server = _start_server()
     base = f"http://127.0.0.1:{server.server_port}"
     monkeypatch.setattr(vp, "API_FOOTBALL_BASE", base)
-    monkeypatch.setattr(vp, "FIXTURES_DIR", Path("/tmp/verify_providers_test_probes"))
+    monkeypatch.setattr(vp, "FIXTURES_DIR", tmp_path)
 
     try:
         findings = vp.probe_api_football("fake-key")
@@ -124,6 +133,31 @@ def test_probe_api_football_against_local_server(monkeypatch):
     assert findings["account_status"]["requests"]["limit_day"] == 100
     assert findings["fixtures_returned"] == 2
     assert findings["errors"] == []
+
+    # The account holder's real name/email must never survive into
+    # findings or the saved fixture -- confirmed live that API-Football's
+    # /status returns them, and the first real run saved them unfiltered
+    # before this scrub existed.
+    assert "account" not in findings["account_status"]
+    saved = json.loads((tmp_path / "api_football_status.json").read_text())
+    assert "account" not in saved["body"]["response"]
+    assert "Test" not in json.dumps(saved)
+    assert "test@example.com" not in json.dumps(saved)
+
+
+def test_scrub_account_pii_removes_nested_account_blocks():
+    scrubbed = vp._scrub_account_pii(
+        {
+            "response": {
+                "account": {"firstname": "A", "email": "a@example.com"},
+                "subscription": {"plan": "Free"},
+            },
+            "results": 1,
+        }
+    )
+    assert "account" not in scrubbed["response"]
+    assert scrubbed["response"]["subscription"]["plan"] == "Free"
+    assert scrubbed["results"] == 1
 
 
 def test_decision_table_flags_missing_pinnacle_coverage():

@@ -34,6 +34,43 @@ repointed to strategies".
   tier** — sources disagree. Confirm this the first time B2's ingestion
   code runs in GitHub Actions (normal internet access there) against a
   real API key, and update `docs/ARCHITECTURE.md` once confirmed.
+- **B1b — live provider verification, in progress, real findings so
+  far.** A later prompt (referencing a "Prompt 5" this session never
+  received — the provider pin apparently moved from The Odds API to
+  **OddsPapi** in between; noting the gap rather than silently
+  pretending continuity) asked for live verification via
+  `scripts/verify_providers.py` and `.github/workflows/verify-providers.yml`
+  (manual-trigger only, run where the real secrets and internet are —
+  this sandbox has neither).
+  - **API-Football: confirmed live and working.** Real account on the
+    free plan, `requests.limit_day: 100`, matches the secondary-source
+    figure from B1. `/fixtures` for a 3-days-out date returned 0
+    results — not necessarily a problem (could just be an off day for
+    the unfiltered global fixture list), but worth watching once B2
+    polls a specific competition instead.
+  - **OddsPapi: blocked on the first live run, cause diagnosed and a
+    fix pushed, not yet re-verified.** The very first call
+    (`/v4/sports`) returned an HTTP 403 with Cloudflare "error code:
+    1010" — a bot-signature block, not an auth failure, almost
+    certainly triggered by `urllib`'s default `Python-urllib/x.y`
+    User-Agent. Added a realistic `User-Agent`/`Accept` header. **This
+    fix is unverified** — needs another live run to confirm it actually
+    resolves the block before the Pinnacle/1xBet coverage question can
+    be answered at all.
+  - **Real incident, fixed:** API-Football's `/status` response
+    included the account holder's real name and email in an `account`
+    block. The script saved and printed it unfiltered on the first
+    live run — it reached a committed... no, a build artifact (not
+    committed to git; the commit step is conditioned on the probe
+    succeeding, and this run failed) and the raw job logs. Neither of
+    those could be cleaned up from this session — deleting workflow run
+    logs hit the same `403 Resource not accessible by integration` as
+    triggering the workflow. **The user needs to manually delete the
+    `provider-probe-results` artifact on run `31654579667`** if they
+    want it gone before its 30-day retention expires. Fixed at the
+    source: `_scrub_account_pii` now recursively strips any `account`
+    key before anything is saved, logged, or printed, with a test
+    proving it.
 - **B2–B7** — not started. Next up is B2: fixtures + odds ingestion,
   `odds_snapshots` (append-only), closing-line capture.
 
