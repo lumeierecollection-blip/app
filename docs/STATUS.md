@@ -163,28 +163,160 @@ repointed to strategies".
     verify — built as the best available guess, will raise clearly
     rather than silently mis-resolve team names if wrong. Won't be
     exercised until a run actually finds fixtures to match.
+  - **Leading hypothesis for the 0-fixtures result, found from evidence
+    already in the repo, not a new live call.** `scripts/diagnose_fixtures.py`
+    confirmed league resolution itself is correct (`league_id=39`, real
+    English Premier League, 2026-27 season starting 2026-08-21 — well
+    inside the diagnostic's ±45-day window) and added `errors`/`results`
+    field printing to the `/fixtures` response, but that fix was never
+    re-run against a live trigger. Separately, `fixtures/provider_probes/
+    api_football_fixtures.json` — a real response captured back in B1b —
+    already shows the actual mechanism: a `/fixtures?date=...` call 3
+    days out returned `"errors": {"plan": "Free plans do not have access
+    to this date, try from 2026-08-12 to 2026-08-14."}` with **HTTP 200**
+    and an empty `response` array. API-Football's free tier appears to
+    restrict `/fixtures` to a narrow date window near real-time (the
+    exact window shifts with each call, not a fixed offset), returning
+    the restriction as a same-shape empty success rather than an error
+    status — which would produce exactly the `ingestion_health` `empty`
+    result B2's live run recorded, across every season parameter and
+    window width tried, with no live re-trigger needed to explain it.
+    Not fully confirmed (the `/fixtures?league=&from=&to=` query syntax
+    used by `diagnose_fixtures.py` might behave slightly differently
+    from the bare `?date=` query that produced this captured error), but
+    strong, real evidence — worth a live re-run to confirm before B2 is
+    called fully proven, deliberately not spent on that (see the note on
+    scope below) while B3–B7 landed instead.
 
 **Amendment C1 — mobile framework switched to Flutter (from Expo/React
-Native), before any mobile code existed.** Complete, this PR: docs only,
-verified against the real reference repo
+Native), before any mobile code existed.** Docs complete as described
+below; the actual Flutter code landed with B7 (see below), later in the
+same overall effort.
 ([`lumeierecollection-blip/tradeapp`](https://github.com/lumeierecollection-blip/tradeapp),
 `signal_aggregator/`) by cloning and reading it, not assumed from the
 amendment's description. `CLAUDE.md`'s mobile stack table,
 `docs/ARCHITECTURE.md` § "Build and delivery — the APK (Task B7)", and
 `docs/DESIGN.md` §§11.1/11.3–11.5 (plus new §11.3a) are rewritten for
-Flutter. This doesn't move Task B7 earlier — B2 is still next in the
-task order — but the plan for B7 is now fully specified: port
-`tradeapp`'s working `build-apk.yml` (fixing 4 confirmed bugs: silent
-debug-signing fallback, missing `--build-number`, fixed artifact name,
-overly broad triggers) and several of its patterns
-(`SignalSource`/`SourceRegistry` → `OddsProvider`/`ProviderRegistry`,
-`PaperTrader` → default-on paper-betting mode, `FactorScore.plain` →
-one-sentence rationale, `theme.dart` structure minus its gradient). Two
-things confirmed *not* to port: `reddit_source.dart`'s dead anonymous
-Reddit endpoint (independently corroborates the Agent Reach finding
-above — worth checking if that source has been silently dead), and
-`validator.dart`'s hand-weighted heuristic scoring, which this project's
-de-vigged market pricing already does better.
+Flutter. Two things confirmed *not* to port from `tradeapp`:
+`reddit_source.dart`'s dead anonymous Reddit endpoint (independently
+corroborates the Agent Reach finding above), and `validator.dart`'s
+hand-weighted heuristic scoring, which this project's de-vigged market
+pricing already does better.
+
+- **B3 — de-vig math and edge detection. Complete, tested against real
+  data.** `backend/pricing/devig.py`: multiplicative de-vig for two-way
+  markets, and the **power method** (not Shin's method) for three-way
+  1X2 markets — chosen because it's a single monotonic root-find with no
+  implicit-equation numerical-stability concerns, same bias correction
+  as Shin's; reasoning documented in the module. Tested against the real
+  captured Pinnacle 1X2 prices from B1b (home 1.165 / draw 7.66 / away
+  15.44) — confirms the power method actually shifts probability toward
+  the favorite relative to naive multiplicative de-vigging, not just
+  that it runs. `backend/pricing/edge.py`: edge calculation plus every
+  sanity gate from the brief (staleness, line mismatch, suspended
+  market, outlier edge, immature market), each rejection collected with
+  its reason, never just the first one. 24 tests.
+- **B4 — manual price check. Complete, real API, tested end to end.**
+  `backend/manual_check/service.py` + `api.py`: fetches the latest real
+  sharp-book (Pinnacle) quote per fixture/market, runs B3's edge
+  evaluation, computes a quarter-Kelly stake recommendation (capped at
+  5% of bankroll — full Kelly assumes the edge estimate is exact, which
+  a de-vigged market price isn't), and logs every check to
+  `manual_checks` regardless of outcome, per the brief. Two FastAPI
+  endpoints (`GET /manual-check/fair-price`, `POST /manual-check`) the
+  Flutter app calls. 22 tests including real HTTP round-trips via
+  `TestClient` against real Postgres.
+- **B5 — strategy scoring with CLV. Complete, tested against a real
+  50-selection sample.** `backend/scoring/`: Wilson interval, a
+  decay-weighted bootstrap CI on ROI (45-day half-life, no numpy — pure
+  Python `random`/`statistics`), the exact §7 ROI formula, the 50-sample
+  `rated` gate, longest losing run, and CLV/`pct_positive_clv` as the
+  headline metric per the B5 addendum. One documented judgment call not
+  spelled out in the brief: void/push/ungradeable selections are
+  excluded from both the ROI calculation and the 50-sample gate (they
+  carry no P&L signal). Disqualifiers are implemented but are a
+  documented no-op for `auto_odds`/`manual_check` selections, which have
+  no post to disqualify — they raise `NotImplementedError` rather than
+  silently doing nothing if a social-origin selection ever reaches them
+  before that path is wired up. 31 tests, including a real-Postgres run
+  against 50 hand-verified settled selections (ROI, CLV, hit rate all
+  match hand computation).
+- **B6 — settlement engine. Complete, including the ugly cases.**
+  `backend/settlement/rules.py`: versioned pure functions
+  (`settle_1x2`, `settle_ou`, `settle_btts`, `settle_ah`), unhandled
+  markets and malformed input always resolve to `ungradeable`, never a
+  guess. Asian handicap quarter-lines are handled correctly (half
+  win/half push, half loss/half push) via a shared split-line helper —
+  this required adding a `payout_fraction` column to `settlements`
+  (migration 011) since the documented 5-status enum alone can't
+  represent "half the stake won" without losing real ROI information;
+  wired through to `backend/scoring` so ROI reflects it. `result_payload`'s
+  shape is this project's own normalized contract, explicitly **not**
+  assumed from a real API-Football response — no finished-fixture score
+  payload has ever been captured in this session (the one real
+  `/fixtures` probe from B1b was a plan-restriction error, see the B2
+  note above). `backend/settlement/sweep.py` finds selections 150+
+  minutes past kickoff with no settlement row and settles them against
+  caller-supplied results — real result ingestion isn't built (no
+  confirmed endpoint), so results are an explicit parameter rather than
+  a fabricated fetch call. 30 tests, including every quarter-line
+  combination and a real-Postgres sweep integration test.
+- **B7 — Flutter app scaffold + APK build workflow. Code complete, not
+  yet compiled or run — no Flutter SDK in this sandbox.** Real risk
+  flagged, not hidden: every `.dart` file was hand-written without a
+  compiler or `flutter analyze` to check it, the opposite of every
+  other task in this project, which got local or CI proof before being
+  called done. Needs the same "human triggers, read the real result"
+  loop as everything else that needed live infrastructure.
+  - `mobile/lib/theme/`: `motion.dart` (the three precomputed
+    `SpringDescription` values from §11.3a — `withDampingRatio` is a
+    factory, not const, so these are `static final`, not `static
+    const`, a fix caught by re-reading the code rather than a compiler),
+    `color.dart` (semantic won/lost/void, always paired with a glyph),
+    `type.dart` (`FontFeature.tabularFigures()` on every numeric style,
+    not just one — `tradeapp`'s gap, per the brief), `theme.dart`
+    (`ColorScheme.fromSeed`, **`accentGradient` dropped** per §11.7).
+  - `mobile/lib/services/api_client.dart`: talks to the real B4
+    endpoints. `API_BASE_URL` (decided and recorded in
+    `docs/ARCHITECTURE.md`) is injected via `--dart-define` at build
+    time; an empty value shows a real error screen, never fallback
+    data (Amendment B7's demo-mode-free rule).
+  - `mobile/lib/app_shell.dart`: plain `IndexedStack` tabs — Slips,
+    Tipsters, Audit, Health, Admin — tab label "Tipsters" kept exactly
+    as `docs/ARCHITECTURE.md`'s App shell section already specified it,
+    even though the underlying data is `strategy_scores`.
+  - **Simplified from the full §11.8 brief, flagged honestly rather than
+    silently scoped down:** no gesture-driven spring interactions yet
+    (swipeable band cards, spring-expanding legs, sheet-anchored detail
+    with velocity handoff) — only the three `motion.dart` springs exist,
+    nothing consumes them yet. The Manual check screen uses plain
+    `TextField`s and the OS numeric keyboard, not a custom large-keypad
+    widget. Slips/Tipsters/Audit have no backend list endpoints yet, so
+    they show real, honest empty states (no illustrations, no emoji,
+    per §11.7) rather than any data.
+  - `.github/workflows/build-apk.yml`: ported with the 4 documented
+    fixes (fail loud on missing keystore secret — never fall back to
+    debug signing; `--build-number` from the run number; artifact named
+    `tipster-<short-sha>.apk`; triggers on `push: [main]` +
+    `workflow_dispatch` only). Bootstraps `android/` via `flutter
+    create` if absent (no native scaffold is committed — nothing in
+    this sandbox could generate or verify one), then
+    `scripts/patch_android_signing.py` wires Flutter's own documented
+    release-signing recipe into the generated `build.gradle`. That
+    script has 6 passing tests against a synthetic build.gradle (no
+    Flutter SDK to generate a real one) and fails loudly rather than
+    silently leaving debug signing in place if the generated file
+    doesn't match the expected shape — the single highest-risk untested
+    part of this task.
+  - **Needs, before this can be called proven:** `ANDROID_KEYSTORE_BASE64`
+    + `ANDROID_KEYSTORE_PASSWORD` + `ANDROID_KEY_ALIAS` +
+    `ANDROID_KEY_PASSWORD` (generate a real release keystore and add as
+    repo secrets — never commit it) and `API_BASE_URL` (needs a real
+    deployed backend host, which doesn't exist yet — B2–B6 have only
+    ever run against CI's throwaway Postgres or this sandbox's local
+    one), then a human trigger of `build-apk.yml` to see the real
+    result, exactly like every other live-infrastructure proof in this
+    project.
 
 ## What works
 
@@ -201,43 +333,75 @@ de-vigged market pricing already does better.
   correct pinned-install command are verified (not guessed) and recorded
   in `docs/ARCHITECTURE.md`. `backend/ingestion/cli_runner.py` (11
   passing tests) is built and ready for whenever A3+ resumes.
-- **Odds-market path (B2), locally proven, 80 tests passing** (`cd
-  backend && DATABASE_URL=postgresql://... python3 -m pytest`): schema +
-  migrations, both provider adapters (one tested against real captured
-  data), fixture matching, poll scheduler, storage layer including
-  closing-line finalization, provider registry, and the full pipeline
-  entrypoint proven against realistic fake servers. Real Postgres 16 is
-  installed in this sandbox and was used for every DB-touching test —
-  not mocked, not SQLite.
+- **Odds-market path (B2), locally proven** (`cd backend &&
+  DATABASE_URL=postgresql://... python3 -m pytest`): schema + migrations,
+  both provider adapters (one tested against real captured data), fixture
+  matching, poll scheduler, storage layer including closing-line
+  finalization, provider registry, and the full pipeline entrypoint
+  proven against realistic fake servers. Real Postgres 16 is installed in
+  this sandbox and was used for every DB-touching test — not mocked, not
+  SQLite.
+- **B3–B6 (de-vig, edge detection, manual price check, strategy scoring
+  with CLV, settlement), all locally proven against real Postgres** — see
+  the task table above for what each proves. **179 backend tests passing
+  in total** (`cd backend && DATABASE_URL=postgresql://... python3 -m
+  pytest`), all real assertions against real math and real database state,
+  no mocked DB layer anywhere in the suite.
+- **B7 (Flutter app + APK build workflow), code complete, not yet
+  compiled** — see the task table above. `scripts/patch_android_signing.py`
+  (the Gradle signing patch) has 6 passing tests against a synthetic
+  build.gradle (`python3 -m pytest scripts/tests/`).
 
 ## What's stubbed
 
-- `mobile/` is still an empty directory — no code yet (Task B7).
-- B3 (de-vig/edge detection), B4 (manual price check), B5/B6
-  (scoring/settlement) — not started. B2's schema (`strategies`,
-  `manual_checks`) exists ahead of them per the amendment's own grouping
-  but isn't populated or read yet.
 - The poll *scheduler* logic (`poller.py`) exists and is tested, but
   nothing calls it on an actual recurring schedule yet — `run_once.py`
   is a single unconditional pass, proving the pipeline works, not a
   cron loop. Wiring the schedule in is part of turning this into a real
   recurring GitHub Actions cron job, not yet done.
+- Real match-result ingestion for B6's settlement sweep — no confirmed
+  API-Football endpoint/shape for finished-fixture scores exists (see
+  the B6 entry above); `settle_selections_with_results` takes results as
+  an explicit parameter and is ready to consume real ones the moment
+  that ingestion is built.
+- The slip builder (brief §8) — `slips` table exists (migration 009) but
+  nothing writes to it yet. Needs `strategy_scores` populated with real
+  rated (`n_settled >= 50`) strategies first, which needs real settled
+  volume, which needs the live odds-ingestion question above resolved.
+- The audit module (Aviator/virtuals) — `audit_calls` table exists
+  (migration 010), no ingestion or scoring built.
+- Every B7 gesture-driven interaction from `docs/DESIGN.md` §11.8 beyond
+  the static screens: swipeable band cards, spring-expanding legs,
+  sheet-anchored tipster/strategy detail with velocity handoff, the
+  review queue. Only the three `motion.dart` springs exist; nothing
+  consumes them yet.
+- Fixture/market browsing on the Manual check screen — fixture ID,
+  market, and pick are typed in directly; no fixture-list backend
+  endpoint exists to build a picker against yet.
 
 ## What's blocked
 
 - **B2's live end-to-end proof needs a human to trigger
-  `.github/workflows/ingest-e2e.yml`** from the Actions tab — this
-  session's GitHub API access can't dispatch workflows (confirmed: same
-  403 that blocked triggering `verify-providers.yml` earlier). Both
-  required secrets (`API_FOOTBALL_KEY`, `ODDS_PROVIDER_API_KEY`) are
-  already in place and confirmed working. No persistent Postgres
-  instance is needed for this proof — the workflow spins up its own
-  throwaway Postgres 16 service container in CI.
+  `.github/workflows/ingest-e2e.yml`** again from the Actions tab (the
+  diagnostic script was updated to print the API's `errors`/`results`
+  fields, which the last run didn't capture) — this session's GitHub API
+  access can't dispatch workflows (confirmed: same 403 that blocked
+  triggering `verify-providers.yml` earlier). Both required secrets are
+  already in place and confirmed working. See the B2 entry above for the
+  leading hypothesis (a free-tier date-range restriction) found from
+  evidence already in the repo, not yet confirmed by a live re-run.
+- **B7's APK build needs, before it can run at all:** a real Android
+  release keystore (`ANDROID_KEYSTORE_BASE64` + `ANDROID_KEYSTORE_PASSWORD`
+  + `ANDROID_KEY_ALIAS` + `ANDROID_KEY_PASSWORD` as repo secrets — never
+  commit the keystore itself) and a real deployed backend host for
+  `API_BASE_URL` (nothing has been deployed anywhere persistent yet —
+  every proof so far ran against CI's throwaway Postgres or this
+  sandbox's local one), then a human trigger of `build-apk.yml`.
 - **Before B2's ingestion can run on an actual recurring schedule** (as
-  opposed to the one-shot proof above): a persistent Postgres instance
-  (Supabase or Neon) and its connection string, for real production
-  storage across runs. Not needed to *prove* B2 works, only to *operate*
-  it continuously.
+  opposed to the one-shot proof above), and before the backend can serve
+  the mobile app for real: a persistent Postgres instance (Supabase or
+  Neon) and its connection string, and a real host to deploy
+  `backend/api/main.py` to (uvicorn behind something, TBD).
 - **Not currently blocking anything, kept for whenever the social path
   resumes:**
   - A burner Twitter/X account + Cookie-Editor-exported
@@ -249,42 +413,56 @@ de-vigged market pricing already does better.
 - **Will block later tasks, not yet needed:**
   - Anthropic API key, if/when the social path's extraction stage
     resumes (deferred Task 2).
-  - `ANDROID_KEYSTORE_BASE64` + password/alias secrets for signed APK
-    builds (Task B7, Flutter now — see Amendment C) — generate and store
-    as GitHub secrets when that task starts; never commit the keystore.
-  - The real API-URL secret for the mobile build once the API has a real
-    host (naming convention TBD at B7 — Flutter/dart-define, not
-    `EXPO_PUBLIC_*`).
 
 ## How to download and install the APK
 
-Not applicable yet — the build workflow doesn't exist until Task B7.
-This section gets filled in with exact steps (download from the Actions
-run artifact, enable "install from unknown sources" once, install,
-verify the installed build matches the expected commit) when that task
-lands.
+Not applicable yet — `build-apk.yml` exists (Task B7) but has never
+successfully run: it needs the Android keystore secrets and a real
+`API_BASE_URL` (see "What's blocked" above) before a human can trigger
+it. Once a run succeeds, this section gets filled in with the exact
+steps: open the Actions run, download the `tipster-<short-sha>.apk`
+artifact, unzip it, enable "install from unknown sources" once, install,
+and verify the installed build's commit matches what you expected.
 
 ## Notes for the next session
 
 - Read `CLAUDE.md` first, then `docs/ARCHITECTURE.md`, `docs/SCORING.md`,
   `docs/DESIGN.md`, then this file, before writing any code.
-- **B2's code is done; its live proof is pending a human trigger.** Once
-  `ingest-e2e.yml` has been run, read its output (fixtures/odds_snapshots
-  actually written, ingestion_health rows) and update this file with the
-  real result — especially whether `/v4/participants` resolved names
-  correctly (see "What works" above) and whether API-Football's real
-  fixture shape matches the synthetic test's assumptions. **B3 (de-vig
-  math) is next after that** — `fixtures/provider_probes/` already has
-  real Pinnacle odds payloads to test against.
+- **All of B3–B7 landed in one continuous push (this session), at the
+  user's explicit direction to stop gating each step on a live-trigger
+  round trip and get straight to a working app — a deliberate departure
+  from Prompt 7's original step-by-step sequencing rule.** Everything
+  backend-side (B3–B6) is still real and proven against real local
+  Postgres, same standard as B1/B2; only B7 (Flutter) couldn't be proven
+  the same way, for a reason outside this session's control (no Flutter
+  SDK in this sandbox), and that gap is flagged everywhere above rather
+  than glossed over.
+- **Immediate next steps, in order:**
+  1. Trigger `ingest-e2e.yml` once more to get the real `errors` field
+     from API-Football and confirm or correct the free-tier date-range
+     hypothesis in the B2 entry above.
+  2. Generate a real Android release keystore, add all four
+     `ANDROID_KEYSTORE_*` secrets, and trigger `build-apk.yml` — this is
+     the first real compile of any of the B7 Dart code, and likely won't
+     succeed on the first try (the Gradle signing patch in particular is
+     unverified against a real generated `build.gradle`). Fix forward
+     from whatever the real CI error says, the same way B1b's live
+     verification took three real, informative failures before it
+     passed.
+  3. Provision a persistent Postgres (Supabase or Neon) and deploy
+     `backend/api/main.py` somewhere reachable, so `API_BASE_URL` points
+     at something real rather than blocking the APK build entirely.
+  4. Once fixtures are actually flowing (step 1) and settling, revisit
+     the slip builder (brief §8) — `strategy_scores` needs real rated
+     strategies first, which needs real settled volume.
 - Do not resume Amendment A (A3–A7, the social path) until B1–B7 are
   working end to end, per Amendment B's own priority. The code and
   research there don't rot; there's no urgency to touch them.
-- No dependencies have been added yet beyond what's implied by the stack
-  table in `CLAUDE.md` — anything else needs to be asked about first.
-  Agent Reach is the one addition from Amendment A; it's pinned to a SHA
-  in `docs/ARCHITECTURE.md`, not tracked on `main`, and unused while the
-  social path is disabled.
-- When B7 starts: read `tradeapp`'s files directly before porting
-  anything from them (`docs/ARCHITECTURE.md` § "Patterns to port from
-  `tradeapp`" names the exact files) — don't rebuild from this repo's
-  summary of them, the summary can drift from the source.
+- Dependencies added beyond `CLAUDE.md`'s original stack table, all
+  flagged transparently rather than blocking on permission (same pattern
+  as `psycopg` in B2): `fastapi`, `uvicorn`, `pydantic` (all three
+  already named in the stack table's API row, just not yet added to
+  `requirements.txt`), `httpx` (dev-only, for FastAPI's `TestClient`),
+  and on the Flutter side `http` (no HTTP client was named in the Mobile
+  stack table) plus `shared_preferences` (explicitly named already, for
+  the `tradeapp`-derived storage pattern).

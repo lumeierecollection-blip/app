@@ -147,10 +147,17 @@ detail in `docs/DESIGN.md` §11.3a.
   found and none expected) — the manual price check (§B4) is the primary
   way to use this for an SA book, not a fallback.
 - **Fixtures + results:** API-Football (api-sports.io) — pin confirmed
-  live (Task B1b): real account, Free plan, 100 requests/day. One open
-  question from that same check: `/fixtures?date=...` returned 0 results
-  for a 3-days-out date on the Free plan — needs investigating in B2
-  (may need a competition filter rather than a bare date query).
+  live (Task B1b): real account, Free plan, 100 requests/day. Open
+  question from that same check, still not fully confirmed but with a
+  real, evidence-backed lead: `/fixtures?date=...` 3 days out returned
+  HTTP 200 with `"errors": {"plan": "Free plans do not have access to
+  this date, try from 2026-08-12 to 2026-08-14."}` and an empty
+  `response` — a same-shape "success" the pipeline currently can't
+  distinguish from genuine emptiness. B2's later live run found 0
+  fixtures across a 90-day window for the confirmed-correct league_id;
+  this restriction is the leading explanation. Needs one more live
+  trigger of `ingest-e2e.yml` (already instrumented to print the
+  `errors` field) to confirm. See `docs/STATUS.md`.
 - Cache hard, budget requests explicitly — free tiers are small.
 - No cookies, no burner accounts, no proxy, no ToS risk on this path.
 
@@ -207,12 +214,12 @@ recorded in `docs/STATUS.md`.
 | # | Task | Status |
 |---|---|---|
 | B1 | Evaluate providers, confirm SA bookmaker and Pinnacle coverage, pin choices | Done — provisional, see caveat above |
-| B2 | Fixtures + odds ingestion, `odds_snapshots`, closing-line capture | Code complete, 80 tests passing locally; live end-to-end run pending a human trigger (`ingest-e2e.yml`) |
-| B3 | De-vigging, edge calculation, sanity gates | |
-| B4 | Manual price check API + screen | |
-| B5 | Repoint scoring to strategies, add CLV | |
-| B6 | Settlement against real results (original §6/Task 3, unchanged machinery) | |
-| B7 | Flutter app scaffold + APK build workflow, ported from `tradeapp` — demo mode removed; real odds/fixtures data exists by the time this lands, so screens have real content from the start | |
+| B2 | Fixtures + odds ingestion, `odds_snapshots`, closing-line capture | Code complete, 80 tests passing locally; live end-to-end run found a real, not-yet-confirmed lead (likely API-Football free-tier date restriction) — see `docs/STATUS.md` |
+| B3 | De-vigging, edge calculation, sanity gates | Done — 24 tests, tested against real captured Pinnacle prices |
+| B4 | Manual price check API + screen | Backend done — 22 tests, real FastAPI endpoints. Screen ships with B7 |
+| B5 | Repoint scoring to strategies, add CLV | Done — 31 tests, real Postgres end-to-end run verified against hand-computed ROI/CLV |
+| B6 | Settlement against real results (original §6/Task 3, unchanged machinery) | Done — 30 tests including every AH quarter-line case. Real result ingestion still unbuilt (no confirmed API) |
+| B7 | Flutter app scaffold + APK build workflow, ported from `tradeapp` — demo mode removed; real odds/fixtures data exists by the time this lands, so screens have real content from the start | Code complete, **not yet compiled** (no Flutter SDK in this sandbox) — see `docs/STATUS.md` for exactly what's simplified and what a human needs to do to get a real first build |
 
 B7 is deliberately last in this plan, not first — B2's data lands within
 days, so by the time the app is built there's something real to show

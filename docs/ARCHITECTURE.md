@@ -905,10 +905,13 @@ confirmed present in the source file:
   `ANDROID_KEYSTORE_BASE64` (base64), plus `ANDROID_KEYSTORE_PASSWORD`,
   `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`. Never committed, never
   echoed.
-- `EXPO_PUBLIC_API_URL` becomes whatever env-var convention Flutter/dart-define
-  uses for this project — decide and record here when B7 starts; the
-  requirement (demo-mode-free, real API URL injected from secrets) is
-  unchanged.
+- `EXPO_PUBLIC_API_URL` becomes **`API_BASE_URL`, read via `--dart-define`**
+  — decided and recorded here at the start of B7. Wired through as a
+  repo secret in `build-apk.yml`
+  (`--dart-define=API_BASE_URL=${{ secrets.API_BASE_URL }}`), read at
+  compile time via `String.fromEnvironment('API_BASE_URL')` in
+  `mobile/lib/main.dart`. Demo-mode-free requirement holds: if the value
+  is empty, the app shows a real error screen, not fallback data.
 
 ### App shell
 

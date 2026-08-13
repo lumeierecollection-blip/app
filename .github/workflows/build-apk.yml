@@ -1,0 +1,135 @@
+name: Build APK
+
+# Ported from tradeapp's build-apk.yml (docs/ARCHITECTURE.md "Workflow --
+# port tradeapp's build-apk.yml, fix four real bugs"), with four fixes
+# confirmed present in that source file:
+#   1. Never fall back to debug signing if the keystore secret is
+#      missing -- fail the job instead (debug and release use different
+#      signing keys; a debug APK can't upgrade a release install).
+#   2. Pass --build-number so successive builds carry different
+#      versionCodes.
+#   3. Artifact name includes the short commit SHA, not a fixed name.
+#   4. Triggers on push to main plus workflow_dispatch only -- not also
+#      pull_request (two APK builds per PR for no benefit).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build and sign release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Fail loudly if signing secrets are missing (fix #1 -- never fall back to debug signing)
+        run: |
+          missing=0
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name repo secret is missing."
+              missing=1
+            fi
+          done
+          if [ "$missing" = "1" ]; then
+            echo "::error::Add the missing secret(s) under Settings > Secrets and variables > Actions, then re-run. This job never falls back to debug signing -- a debug-signed APK can't upgrade a release install and silently breaks app data."
+            exit 1
+          fi
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+      - name: Fail loudly if the backend API URL is missing
+        run: |
+          if [ -z "${{ secrets.API_BASE_URL }}" ]; then
+            echo "::error::API_BASE_URL repo secret is missing. Demo mode was removed (Amendment B7) -- there is no fallback data to build against."
+            exit 1
+          fi
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Set up Python (for the build.gradle signing patch)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Ensure Android platform files exist
+        working-directory: mobile
+        run: |
+          if [ ! -d android ]; then
+            flutter create --platforms=android --org com.tipsteraggregator --project-name tipster_aggregator .
+          fi
+
+      - name: Get dependencies
+        working-directory: mobile
+        run: flutter pub get
+
+      - name: Analyze
+        working-directory: mobile
+        run: flutter analyze
+
+      - name: Test
+        working-directory: mobile
+        run: flutter test
+
+      - name: Decode signing keystore
+        working-directory: mobile
+        run: echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/app/release-keystore.jks
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+
+      - name: Write key.properties
+        working-directory: mobile
+        run: |
+          cat > android/key.properties <<EOF
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyPassword=$ANDROID_KEY_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          storeFile=release-keystore.jks
+          EOF
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+
+      - name: Wire release signing into build.gradle
+        run: python3 scripts/patch_android_signing.py mobile/android/app/build.gradle
+
+      - name: Build release APK (fix #2 -- real build number)
+        working-directory: mobile
+        run: |
+          flutter build apk --release \
+            --build-number=${{ github.run_number }} \
+            --dart-define=API_BASE_URL=${{ secrets.API_BASE_URL }}
+
+      - name: Name the artifact after the commit (fix #3 -- no fixed artifact name)
+        id: name_artifact
+        run: |
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          mkdir -p mobile/dist
+          cp mobile/build/app/outputs/flutter-apk/app-release.apk "mobile/dist/tipster-$SHORT_SHA.apk"
+          echo "apk_name=tipster-$SHORT_SHA.apk" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.name_artifact.outputs.apk_name }}
+          path: mobile/dist/${{ steps.name_artifact.outputs.apk_name }}
+          if-no-files-found: error
