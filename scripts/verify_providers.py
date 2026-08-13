@@ -148,9 +148,16 @@ def probe_odds_provider(api_key: str) -> dict[str, Any]:
     tournament_id = target.get("tournamentId")
 
     # 3. /v4/bookmakers — does the full catalog list Pinnacle / 1xBet at all?
+    #    Headers captured as `bookmakers_headers` and used below for
+    #    rate_limit_headers: this call always runs and always succeeds if
+    #    we've gotten this far, unlike the per-bookmaker loop below, where
+    #    every call can fail (confirmed live: the 1xBet call hit a 429) —
+    #    reporting rate-limit info from "whatever `headers` happened to be
+    #    last" would silently misattribute it to the wrong call, or crash
+    #    with UnboundLocalError if every loop iteration failed.
     bookmakers_url = f"{ODDS_PROVIDER_BASE}/bookmakers?apiKey={api_key}"
-    body, headers = _get_json(bookmakers_url)
-    _save_probe("oddspapi_bookmakers", {"headers": headers, "body": body})
+    body, bookmakers_headers = _get_json(bookmakers_url)
+    _save_probe("oddspapi_bookmakers", {"headers": bookmakers_headers, "body": body})
     bookmakers = body if isinstance(body, list) else body.get("data", body.get("bookmakers", []))
     bookmaker_names = {str(b.get("bookmakerName", b)).lower() for b in bookmakers} if isinstance(bookmakers, list) else set()
     findings["bookmaker_catalog_size"] = len(bookmakers) if isinstance(bookmakers, list) else "unknown"
@@ -165,12 +172,12 @@ def probe_odds_provider(api_key: str) -> dict[str, Any]:
             f"?bookmaker={book}&tournamentIds={tournament_id}&apiKey={api_key}"
         )
         try:
-            body, headers = _get_json(odds_url)
+            body, odds_headers = _get_json(odds_url)
         except ProbeError as exc:
             findings[f"odds_call_{book}"] = {"error": str(exc)}
             findings["errors"].append(f"{book}: odds-by-tournaments call failed — {exc}")
             continue
-        _save_probe(f"oddspapi_odds_{book}", {"headers": headers, "body": body})
+        _save_probe(f"oddspapi_odds_{book}", {"headers": odds_headers, "body": body})
         fixtures_out = body if isinstance(body, list) else body.get("data", body.get("fixtures", []))
         priced = [
             f for f in fixtures_out
@@ -182,7 +189,7 @@ def probe_odds_provider(api_key: str) -> dict[str, Any]:
         }
 
     findings["rate_limit_headers"] = {
-        k: v for k, v in headers.items()
+        k: v for k, v in bookmakers_headers.items()
         if any(term in k.lower() for term in ("rate", "limit", "remaining", "quota", "requests"))
     }
     return findings
@@ -212,11 +219,15 @@ def probe_api_football(api_key: str) -> dict[str, Any]:
     headers_req = {"x-apisports-key": api_key}
 
     # 1. /status — account plan and daily quota, straight from the source.
+    #    Captured separately as `status_headers`: this is the endpoint that
+    #    actually carries rate-limit info (confirmed live: x-ratelimit-*).
+    #    /fixtures below does not, so whichever call ran last must not be
+    #    the one this function reports rate-limit headers from.
     status_url = f"{API_FOOTBALL_BASE}/status"
     try:
-        body, headers = _get_json(status_url, headers=headers_req)
+        body, status_headers = _get_json(status_url, headers=headers_req)
         body = _scrub_account_pii(body)
-        _save_probe("api_football_status", {"headers": headers, "body": body})
+        _save_probe("api_football_status", {"headers": status_headers, "body": body})
         findings["account_status"] = body.get("response", body)
     except ProbeError as exc:
         findings["errors"].append(f"/status failed: {exc}")
@@ -226,8 +237,8 @@ def probe_api_football(api_key: str) -> dict[str, Any]:
     target_date = (datetime.now(timezone.utc) + timedelta(days=3)).date().isoformat()
     fixtures_url = f"{API_FOOTBALL_BASE}/fixtures?date={target_date}"
     try:
-        body, headers = _get_json(fixtures_url, headers=headers_req)
-        _save_probe("api_football_fixtures", {"headers": headers, "body": body})
+        body, _fixtures_headers = _get_json(fixtures_url, headers=headers_req)
+        _save_probe("api_football_fixtures", {"headers": _fixtures_headers, "body": body})
         results = body.get("response", [])
         findings["fixtures_probe_date"] = target_date
         findings["fixtures_returned"] = len(results) if isinstance(results, list) else "unknown"
@@ -235,7 +246,7 @@ def probe_api_football(api_key: str) -> dict[str, Any]:
         findings["errors"].append(f"/fixtures failed: {exc}")
 
     findings["rate_limit_headers"] = {
-        k: v for k, v in headers.items()
+        k: v for k, v in status_headers.items()
         if any(term in k.lower() for term in ("rate", "limit", "remaining", "quota", "requests"))
     }
     return findings

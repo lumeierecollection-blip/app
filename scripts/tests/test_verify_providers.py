@@ -93,11 +93,61 @@ class FakeProviderHandler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
 
-def _start_server() -> HTTPServer:
-    server = HTTPServer(("127.0.0.1", 0), FakeProviderHandler)
+class AllOddsCallsFailHandler(FakeProviderHandler):
+    """Same as FakeProviderHandler, but /v4/odds-by-tournaments always 500s.
+
+    Reproduces the exact shape of the live 1xBet rate-limit failure, for
+    every bookmaker in the loop rather than just one -- the scenario that
+    would previously leave `headers` unassigned and crash the function
+    with UnboundLocalError instead of returning findings with the
+    failures recorded.
+    """
+
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        if parsed.path == "/v4/odds-by-tournaments":
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(b'{"error": "simulated failure"}')
+            return
+        super().do_GET()
+
+
+def _start_server(handler=FakeProviderHandler) -> HTTPServer:
+    server = HTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server
+
+
+def test_probe_odds_provider_survives_every_odds_call_failing(monkeypatch, tmp_path):
+    """Regression test for the pre-fix UnboundLocalError.
+
+    Before bookmakers_headers/odds_headers were split out, `headers` was
+    only ever assigned inside the per-bookmaker loop's try block. If
+    every bookmaker's odds-by-tournaments call failed (as the live 1xBet
+    call did with a 429), the function would raise UnboundLocalError
+    instead of returning findings with the failures recorded.
+    """
+    server = _start_server(handler=AllOddsCallsFailHandler)
+    base = f"http://127.0.0.1:{server.server_port}/v4"
+    monkeypatch.setattr(vp, "ODDS_PROVIDER_BASE", base)
+    monkeypatch.setattr(vp, "FIXTURES_DIR", tmp_path)
+
+    try:
+        findings = vp.probe_odds_provider("fake-key")  # must not raise
+    finally:
+        server.shutdown()
+
+    assert findings["catalog_has_pinnacle"] is True  # /bookmakers still worked
+    assert "error" in findings["odds_call_pinnacle"]
+    assert "error" in findings["odds_call_1xbet"]
+    assert len(findings["errors"]) == 2
+    # Reflects /bookmakers's headers (the fake server sends this on every
+    # 200 response) -- proves rate_limit_headers comes from that call, not
+    # from whichever odds-by-tournaments call happened to run last (they
+    # all failed here, so there is no "last successful" one to fall back to).
+    assert findings["rate_limit_headers"] == {"X-RateLimit-Remaining": "42"}
 
 
 def test_probe_odds_provider_against_local_server(monkeypatch, tmp_path):

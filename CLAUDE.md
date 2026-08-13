@@ -136,19 +136,21 @@ detail in `docs/DESIGN.md` §11.3a.
 
 **Amendment B (current, primary path) — odds market, not tipsters:**
 
-- **Odds:** The Odds API, provisionally pinned. Needs to carry Pinnacle
-  (or another recognised sharp book) as the fair-price reference.
-  **Caveat, not yet live-verified:** this session's network policy
-  blocks direct fetches to odds/bookmaker domains, so the pin is based on
-  corroborated secondary sources, not a live test call — confirm against
-  a real API response the first time ingestion code actually runs (Task
-  B2), and update this note once confirmed. Likely **no South African
-  bookmaker coverage** — the manual price check (§B4) is the primary way
-  to use this for an SA book, not a fallback.
-- **Fixtures + results:** API-Football (api-sports.io) — free tier
-  confirmed via independent sources: 100 requests/day, no card required,
-  all endpoints. Better-corroborated than SportMonks's free tier, which
-  only covers two leagues without a paid trial.
+- **Odds:** OddsPapi (`https://api.oddspapi.io/v4`), pin confirmed live
+  (Task B1b, 2026-08-13) against a real account — not secondary sources.
+  **Pinnacle coverage is confirmed**: 10/10 probed Premier League
+  fixtures returned priced Pinnacle odds. 350 bookmakers in the catalog;
+  1xBet is listed but its live odds coverage wasn't confirmed (hit a
+  rate limit mid-check, not a coverage failure). Requires a realistic
+  `User-Agent` header or Cloudflare blocks the request. Likely **no
+  South African bookmaker coverage** (not live-checked, but no evidence
+  found and none expected) — the manual price check (§B4) is the primary
+  way to use this for an SA book, not a fallback.
+- **Fixtures + results:** API-Football (api-sports.io) — pin confirmed
+  live (Task B1b): real account, Free plan, 100 requests/day. One open
+  question from that same check: `/fixtures?date=...` returned 0 results
+  for a 3-days-out date on the Free plan — needs investigating in B2
+  (may need a competition filter rather than a bare date query).
 - Cache hard, budget requests explicitly — free tiers are small.
 - No cookies, no burner accounts, no proxy, no ToS risk on this path.
 

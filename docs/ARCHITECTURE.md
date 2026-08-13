@@ -49,55 +49,78 @@ accurately than almost any tipster, and that price is available over a
 plain API with no cookies, no burner accounts, no ToS risk, and no
 blocked tasks.
 
-### Odds — The Odds API (provisionally pinned)
+### Odds — OddsPapi (live-confirmed, Task B1b, 2026-08-13)
 
-**Verification status: not yet live-confirmed.** This session's network
-policy blocks direct fetches to odds/bookmaker/general-web domains
-(confirmed: both a direct `curl` through the environment's proxy and the
-`WebFetch` tool return a hard block — even for a page as unrelated as
-Wikipedia — so this isn't a gambling-specific block, it's this
-environment having no general web egress). B1 calls for live-verified
-free-tier limits and bookmaker coverage, and that couldn't be done from
-here. What follows is the best available corroborated secondary-source
-picture, and the user explicitly chose to proceed provisionally rather
-than block on it — **confirm all of it against a real API response the
-first time Task B2's ingestion code actually runs** (it runs in GitHub
-Actions, which has normal internet access), and update this section once
-confirmed.
+**The provider pin moved from "The Odds API" to OddsPapi** in a prompt
+this session never received (referenced as "Prompt 5" by a later one) —
+noted here rather than silently smoothed over, since `docs/STATUS.md`
+records the gap. OddsPapi is now confirmed against a real account, not
+secondary sources: `scripts/verify_providers.py`, run via
+`.github/workflows/verify-providers.yml` (manual-trigger, since this
+session's sandbox has no general web egress — confirmed via both a
+direct `curl` through the environment's proxy and the `WebFetch` tool
+failing even on Wikipedia). Raw responses saved to
+`fixtures/provider_probes/`.
 
-- Free "Starter" tier: 500 credits/month, no card required. A credit is
-  not 1:1 with a request — cost scales with how many markets/regions are
-  requested per call, so budget for that when designing the poll
-  schedule in Task B2.
-- Pinnacle (the sharp reference this whole method depends on) is
-  reported present in the "eu" region's bookmaker set. **Conflicting
-  secondary sources on whether Pinnacle specifically requires the paid
-  "Business" tier rather than the free "Starter" tier** — this is the
-  single most important thing to confirm with a real account before
-  building B3's edge calculation on it.
-- Context: Pinnacle closed its own public API to new signups on 2025-07-23
-  (corroborated by three independent sources — a betting-arbitrage forum,
-  a competing odds-API vendor's blog, and a third-party "drop-in
-  replacement" project's README). Aggregators that still carry Pinnacle
-  prices are relaying/scraping its public site odds, not using a
-  restored official feed.
-- **No evidence found of a South Africa region or any South African
-  bookmaker** (Hollywoodbets, Betway, Supabets, Sportingbet) on The Odds
-  API. Treat this as very likely true, not just unconfirmed — which
-  means the manual price check (Task B4) is the primary way to use this
-  system against a South African book, not a fallback for the cases the
-  API doesn't cover.
-- Regions observed in documentation excerpts: `us`, `us2`, `uk`, `au`,
-  `eu`. No `za`.
+- **Pinnacle coverage: confirmed live.** `/v4/odds-by-tournaments` for
+  Premier League (tournamentId 17) with `bookmaker=pinnacle` returned 10
+  fixtures, all 10 with priced odds. This was the single fact the whole
+  method depended on, and it now has a real, positive answer — not an
+  assumption.
+- Base URL `https://api.oddspapi.io/v4`, `apiKey` as a query parameter.
+  **Requires a realistic `User-Agent`/`Accept` header** — the first live
+  run failed outright with a Cloudflare "error code: 1010" bot-block
+  using `urllib`'s default User-Agent; fixed in the probe script and
+  confirmed working on the next run.
+- Full bookmaker catalog: 350 bookmakers. Confirmed present by name:
+  Pinnacle, 1xBet.
+- **1xBet: listed in the catalog, but live odds coverage not confirmed**
+  — the `odds-by-tournaments` call for `bookmaker=1xbet` hit a 429 rate
+  limit (`retryMs: 588`) before it could return a result. Not a coverage
+  failure, just an untested one; a follow-up probe with request spacing
+  would resolve it, but nothing downstream depends on 1xBet specifically
+  the way it depends on Pinnacle.
+- **Rate limiting is per-endpoint and communicated in the 429 response
+  body** (`error.retryAfter`/`error.retryMs`), not in response headers —
+  confirmed by the empty `rate_limit_headers` result on both the
+  successful and rate-limited calls. Task B2's polling code needs to
+  read and respect that body field for backoff; header-sniffing won't
+  see it.
+- **No live check was done for South African bookmaker coverage
+  specifically** (only Pinnacle and 1xBet were probed). Secondary-source
+  research still says likely none — treat that as probable, not
+  confirmed, and the manual price check (Task B4) is still the primary
+  way to use this system against a South African book either way.
+- Tournament catalog for football/soccer alone: 1,762 tournaments —
+  confirms this isn't a thin dataset.
 
-### Fixtures and results — API-Football (api-sports.io)
+### Fixtures and results — API-Football (api-sports.io) — live-confirmed
 
-Better-corroborated than the odds provider, from multiple independent
-sources: free tier is 100 requests/day, no card required, all endpoints,
-resets at 00:00 UTC (unused requests are lost, they don't roll over).
-SportMonks's permanent free tier only covers two leagues (Danish
-Superliga, Scottish Premiership); a fuller trial needs a card. API-Football
-is the better free-tier-first choice for fixtures + results.
+Confirmed against a real account (same B1b run): Free plan, active,
+`requests.limit_day: 100` — matches the secondary-source figure from the
+original B1 pass. Auth via the `x-apisports-key` header, base
+`https://v3.football.api-sports.io`.
+
+**One real finding worth investigating in B2, not yet explained:**
+`/fixtures?date=<3-days-out>` returned 0 results on the Free plan. Could
+be genuinely no matches that day across every competition API-Football
+covers (possible but would be unusual for a global, all-competitions
+query), or the Free plan could restrict bare date queries and require a
+`league`/competition filter — B2 should test both before assuming either.
+
+**A privacy incident happened during this verification and was fixed at
+the source, not just patched over:** `/status`'s real response includes
+the account holder's name and email in an `account` block alongside the
+`subscription`/`requests` fields this project actually needs. The first
+live run saved and printed it unfiltered — it reached a build artifact
+and job logs (not a git commit; that step only runs after a successful
+probe, and that run failed for an unrelated reason first). Fixed with a
+recursive PII scrub (`_scrub_account_pii` in `scripts/verify_providers.py`)
+that strips any `account` key before anything is saved, logged, or
+printed, confirmed both by a test and by the next live run's clean
+output. If any script or adapter calls `/status` again later, it must
+go through the same scrub — this isn't a one-off cleanup, it's a
+standing rule for this endpoint.
 
 ### Budget discipline
 
