@@ -1,0 +1,90 @@
+name: Ingest One Fixture (B2 end-to-end proof)
+
+# Manual-only: hits metered, real third-party APIs. Proves the full
+# odds-market ingestion pipeline (Task B2) against real data — fetch
+# real fixtures from API-Football, real Pinnacle odds from OddsPapi,
+# match them, and write real rows to a real Postgres — using a
+# short-lived CI-only Postgres service container, not a production
+# database. This proves the pipeline works; it doesn't stand in for
+# provisioning a real persistent Supabase/Neon instance for the actual
+# recurring production cron job, which is a separate, later concern.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ingest:
+    name: Prove the odds-market pipeline against real data
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: tipster
+          POSTGRES_PASSWORD: tipster
+          POSTGRES_DB: tipster
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://tipster:tipster@localhost:5432/tipster
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r backend/requirements.txt
+          pip install -r backend/requirements-dev.txt
+
+      - name: Run the full test suite against the CI Postgres service
+        working-directory: backend
+        run: python3 -m pytest -v
+
+      - name: Fail loudly if provider secrets are missing
+        run: |
+          if [ -z "${{ secrets.API_FOOTBALL_KEY }}" ] || [ -z "${{ secrets.ODDS_PROVIDER_API_KEY }}" ]; then
+            echo "::error::API_FOOTBALL_KEY and/or ODDS_PROVIDER_API_KEY repo secret is missing. Add both under Settings > Secrets and variables > Actions, then re-run."
+            exit 1
+          fi
+
+      - name: Apply migrations
+        working-directory: backend
+        run: python3 -m db.migrate
+
+      - name: Ingest one real fixture end to end
+        working-directory: backend
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          ODDS_PROVIDER_API_KEY: ${{ secrets.ODDS_PROVIDER_API_KEY }}
+        run: python3 -m ingestion.odds.run_once
+
+      - name: Show what actually landed in Postgres
+        working-directory: backend
+        run: |
+          python3 -c "
+          import psycopg, os
+          conn = psycopg.connect(os.environ['DATABASE_URL'])
+          print('--- fixtures ---')
+          for row in conn.execute('SELECT provider_fixture_id, competition, home, away, kickoff_utc FROM fixtures'):
+              print(row)
+          print('--- odds_snapshots ---')
+          for row in conn.execute('SELECT bookmaker, market, selection, line, odds, is_closing_line FROM odds_snapshots'):
+              print(row)
+          print('--- ingestion_health ---')
+          for row in conn.execute('SELECT platform, status, detail FROM ingestion_health ORDER BY run_at'):
+              print(row)
+          "

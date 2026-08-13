@@ -93,7 +93,7 @@ worker.
 | Language | Python 3.11 | |
 | Polled ingestion | GitHub Actions cron | Odds, fixtures, results (Reddit/X deferred — see Data sources) |
 | Telegram ingestion | Long-lived worker on Fly.io or Railway | MTProto needs a persistent session file on a volume |
-| Database | Postgres — Supabase or Neon | Real transactions and window functions required; not SQLite |
+| Database | Postgres — Supabase or Neon | Real transactions and window functions required; not SQLite. Driver: `psycopg[binary]` v3. Migrations: plain numbered SQL files + a small dependency-free runner (`backend/db/migrate.py`), no Alembic/SQLAlchemy |
 | Queue | Postgres `SELECT … FOR UPDATE SKIP LOCKED` | No Redis at this volume |
 | API | FastAPI + Pydantic v2 | |
 | Extraction | Anthropic API, `claude-sonnet-4-6` | Structured JSON from unstructured posts |
@@ -207,7 +207,7 @@ recorded in `docs/STATUS.md`.
 | # | Task | Status |
 |---|---|---|
 | B1 | Evaluate providers, confirm SA bookmaker and Pinnacle coverage, pin choices | Done — provisional, see caveat above |
-| B2 | Fixtures + odds ingestion, `odds_snapshots`, closing-line capture | Next |
+| B2 | Fixtures + odds ingestion, `odds_snapshots`, closing-line capture | Code complete, 80 tests passing locally; live end-to-end run pending a human trigger (`ingest-e2e.yml`) |
 | B3 | De-vigging, edge calculation, sanity gates | |
 | B4 | Manual price check API + screen | |
 | B5 | Repoint scoring to strategies, add CLV | |

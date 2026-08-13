@@ -513,6 +513,48 @@ APIs, cached and budgeted against their free-tier limits (Task B2).
   job can run "successfully" and simply stop finding anything because
   the quota is gone.
 
+### Implementation (Task B2, built)
+
+`backend/db/migrations/` (5 SQL files, applied by `backend/db/migrate.py`)
+and `backend/ingestion/odds/` — provider adapters
+(`api_football_provider.py`, `oddspapi_provider.py`), the
+`SignalSource`/`SourceRegistry`-derived `OddsProviderRegistry`
+(`registry.py`, real thread-pool concurrency), fixture identity
+resolution (`fixture_matching.py`), the poll scheduler (`poller.py`),
+storage including closing-line finalization (`storage.py`), and the
+pipeline entrypoint (`run_once.py`). 80 tests, run with `cd backend &&
+DATABASE_URL=postgresql://... python3 -m pytest` — a real local
+Postgres 16, not a mock.
+
+**Two real parsing details found only by testing `OddsPapiProvider`
+against the actual captured B1b payload, not assumed from the
+documented shape:**
+
+- A fixture's `bookmakerOdds[bookmaker].markets` has ~36 entries, and
+  outcome ids like "home"/"draw"/"away" are **not unique across
+  markets** — a second period (likely a half; not independently
+  confirmed which) has its own moneyline market with the same outcome
+  ids and materially different real prices. `bookmakerMarketId`'s
+  period segment (the second-to-last "/"-separated component) has to be
+  checked alongside the outcome id; period `"0"` is the full match, and
+  is the only one this project ingests.
+- Totals markets carry roughly 10 alternate lines per fixture, all
+  `mainLine: false`, plus one `mainLine: true` designated main line.
+  Only the main line is ingested — the alternates are real data, just
+  out of scope for what Task B3's de-vig math needs right now.
+
+**One gap, not yet live-confirmed:** resolving OddsPapi's
+`participant1Id`/`participant2Id` to team names needs a `/v4/participants`
+call whose exact parameter shape isn't documented anywhere this session
+could verify — built as the best available guess (matching every other
+confirmed endpoint's `?<idsParam>=X,Y&apiKey=...` convention), and it
+will raise clearly, not silently mis-resolve, if that guess turns out
+wrong. `.github/workflows/ingest-e2e.yml` (manual-trigger, spins up a
+Postgres 16 service container in CI — no persistent database needed to
+prove this) is written to confirm or correct it, pending a human
+trigger (same permission gap that blocked `verify-providers.yml`'s
+first dispatch).
+
 ## Fair price and value detection (Task B3)
 
 1. **De-vig the sharp book's prices** to get fair probabilities.
@@ -583,6 +625,13 @@ Amendment B adds the primary-path tables (`fixtures`, `odds_snapshots`,
 it uniformly regardless of where a selection came from. `sources`,
 `posts`, and `source_scores` are the deferred social-path tables —
 unchanged, kept for whenever `sources.social.enabled` is on.
+
+**Built, Task B2** (`backend/db/migrations/`, real SQL, not just this
+sketch): `fixtures`, `odds_snapshots`, `strategies`, `manual_checks`,
+`ingestion_health`. **Not yet built**: `selections` (with `origin`),
+`settlements`, `strategy_scores`, `slips`, `audit_calls`, and the
+deferred-path tables (`sources`, `posts`, `source_scores`) — land with
+B3/B5/B6 and whenever the social path resumes, respectively.
 
 ```
 -- Amendment B — primary, odds-market path

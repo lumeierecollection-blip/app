@@ -74,9 +74,81 @@ repointed to strategies".
     sources — Amendment B" (Odds/Fixtures subsections, both rewritten
     from "provisional" to "live-confirmed"). Raw probe responses
     committed under `fixtures/provider_probes/`.
-- **B2–B7** — not started. Next up is B2: fixtures + odds ingestion,
-  `odds_snapshots` (append-only), closing-line capture. Unblocked now —
-  both provider pins are live-confirmed, not assumed.
+- **B2 — fixtures + odds ingestion. Code complete and locally proven
+  against real local Postgres + real captured data; live end-to-end run
+  against the real APIs not yet triggered (see below).**
+  - **Schema:** `fixtures`, `odds_snapshots` (append-only, confirmed by
+    test), `strategies`, `manual_checks`, `ingestion_health` — 5 SQL
+    migrations under `backend/db/migrations/`, applied by
+    `backend/db/migrate.py` (small dependency-free runner, no
+    Alembic/SQLAlchemy — tracks applied files in `schema_migrations`).
+    Tested against a real local Postgres 16 instance (this sandbox has
+    one installed) — every constraint (odds > 1.0, unique
+    `provider_fixture_id`, `ingestion_health.status` enum) is proven by
+    a test that tries to violate it, not just declared in SQL.
+  - **`OddsProvider`/`FixtureProvider` adapters**
+    (`backend/ingestion/odds/`), following the `SignalSource`/
+    `SourceRegistry` pattern from `tradeapp` (Amendment C3):
+    `OddsPapiProvider.fetch_odds()` is tested against the **real
+    captured B1b payload** (`fixtures/provider_probes/oddspapi_odds_pinnacle.json`)
+    — not synthetic data — and this caught two real parsing bugs before
+    they could ever run live:
+    1. A fixture's outcome ids ("home"/"draw"/"away") are **not
+       unique** — a second "period" (likely a half, not confirmed which)
+       has its own moneyline market with the same outcome ids and
+       materially different real prices (1.534 vs the correct 1.165 for
+       "home"). Fixed by also reading `bookmakerMarketId`'s period
+       segment, confirmed only period "0" is the full match.
+    2. Totals markets carry ~10 alternate lines per fixture (all
+       `mainLine: false`) plus one designated main line. Without
+       filtering on `mainLine`, every alternate line would have been
+       ingested as if it were the primary O/U market.
+    `ApiFootballFixtureProvider` is tested against **synthetic** data,
+    clearly marked as such in the test file — B1b's real probe returned
+    zero fixtures for its date, so there's no real non-empty payload to
+    replay yet. A raw-string URL-building bug (unescaped competition
+    name breaking on the space in "Premier League") was caught by this
+    synthetic test anyway and fixed.
+  - **Fixture identity resolution** (`fixture_matching.py`): team-name
+    normalization (accent/suffix stripping) + a seeded alias table (Man
+    Utd → Manchester United, Spurs → Tottenham Hotspur, etc.) + kickoff
+    proximity, refusing to guess on ambiguous matches. 16 tests.
+  - **Poll scheduler** (`poller.py`): discovery → 6h → 2h → 30min → 15min
+    in the final 2 hours, pure functions, 12 tests. The exact widening
+    tiers beyond "15 min in the final 2 hours" are this project's own
+    design choice (the brief didn't specify them), documented as such in
+    the module.
+  - **Storage** (`storage.py`): fixture upsert, append-only snapshot
+    insert, and `finalize_closing_lines` — the query that flags the
+    latest pre-kickoff snapshot per (fixture, bookmaker, market,
+    selection) as the closing line. Tested against real Postgres,
+    including idempotency and independent handling per market.
+  - **`OddsProviderRegistry`**: real thread-pool concurrency (not just a
+    naming nod to `SourceRegistry.fetchAll`'s parallelism), dedupe, sort
+    — tested with a timing assertion proving it's actually concurrent.
+  - **`run_once.py`**: the real pipeline entrypoint — fetch fixtures,
+    fetch odds, match, store, finalize closing lines, record
+    `ingestion_health` for both providers on every branch (success,
+    empty, error) so quota exhaustion can never look like "no data."
+    Proven end-to-end against two local fake servers replaying
+    realistic response shapes (2 tests) — full pipeline wiring is
+    correct.
+  - **Not yet done:** the live end-to-end run against the *real* APIs.
+    `.github/workflows/ingest-e2e.yml` (manual-trigger, spins up a
+    throwaway Postgres 16 **service container** in CI — no persistent
+    Supabase/Neon needed to prove this, that's a separate, later
+    concern for actual recurring production ingestion) is written and
+    ready to trigger, same permission gap as `verify-providers.yml`
+    before it (can't dispatch it from this session — 403). **Needs a
+    human to trigger it from the Actions tab.**
+  - One thing this run will either confirm or correct, honestly flagged
+    rather than assumed: `OddsPapiProvider.resolve_participant_names()`
+    calls a `/v4/participants` endpoint whose exact shape isn't
+    live-confirmed (search results describe it existing but not its
+    parameters) — built as the best available guess following every
+    other confirmed endpoint's `?<idsParam>=X,Y&apiKey=...` convention.
+    If wrong, the live run will raise clearly (`HttpError`), not
+    silently mis-resolve team names.
 
 **Amendment C1 — mobile framework switched to Flutter (from Expo/React
 Native), before any mobile code existed.** Complete, this PR: docs only,
@@ -115,25 +187,43 @@ de-vigged market pricing already does better.
   correct pinned-install command are verified (not guessed) and recorded
   in `docs/ARCHITECTURE.md`. `backend/ingestion/cli_runner.py` (11
   passing tests) is built and ready for whenever A3+ resumes.
+- **Odds-market path (B2), locally proven, 80 tests passing** (`cd
+  backend && DATABASE_URL=postgresql://... python3 -m pytest`): schema +
+  migrations, both provider adapters (one tested against real captured
+  data), fixture matching, poll scheduler, storage layer including
+  closing-line finalization, provider registry, and the full pipeline
+  entrypoint proven against realistic fake servers. Real Postgres 16 is
+  installed in this sandbox and was used for every DB-touching test —
+  not mocked, not SQLite.
 
 ## What's stubbed
 
 - `mobile/` is still an empty directory — no code yet (Task B7).
-- `backend/` has only `ingestion/cli_runner.py` so far (Amendment A2,
-  deferred-path infra). No models, no migrations, no API, no odds-market
-  ingestion code yet — that's B2.
+- B3 (de-vig/edge detection), B4 (manual price check), B5/B6
+  (scoring/settlement) — not started. B2's schema (`strategies`,
+  `manual_checks`) exists ahead of them per the amendment's own grouping
+  but isn't populated or read yet.
+- The poll *scheduler* logic (`poller.py`) exists and is tested, but
+  nothing calls it on an actual recurring schedule yet — `run_once.py`
+  is a single unconditional pass, proving the pipeline works, not a
+  cron loop. Wiring the schedule in is part of turning this into a real
+  recurring GitHub Actions cron job, not yet done.
 
 ## What's blocked
 
-- **B2 (fixtures + odds ingestion) needs, before or during that
-  session:**
-  - A Postgres instance (Supabase or Neon) and its connection string —
-    same requirement the original Task 1 had, just for the odds-market
-    schema now (`fixtures`, `odds_snapshots`, `strategies`,
-    `strategy_scores`, `manual_checks`, shared `selections`). This is
-    the only remaining blocker — both API keys are already in place as
-    repo secrets (`API_FOOTBALL_KEY`, `ODDS_PROVIDER_API_KEY`) and
-    confirmed working live as of B1b.
+- **B2's live end-to-end proof needs a human to trigger
+  `.github/workflows/ingest-e2e.yml`** from the Actions tab — this
+  session's GitHub API access can't dispatch workflows (confirmed: same
+  403 that blocked triggering `verify-providers.yml` earlier). Both
+  required secrets (`API_FOOTBALL_KEY`, `ODDS_PROVIDER_API_KEY`) are
+  already in place and confirmed working. No persistent Postgres
+  instance is needed for this proof — the workflow spins up its own
+  throwaway Postgres 16 service container in CI.
+- **Before B2's ingestion can run on an actual recurring schedule** (as
+  opposed to the one-shot proof above): a persistent Postgres instance
+  (Supabase or Neon) and its connection string, for real production
+  storage across runs. Not needed to *prove* B2 works, only to *operate*
+  it continuously.
 - **Not currently blocking anything, kept for whenever the social path
   resumes:**
   - A burner Twitter/X account + Cookie-Editor-exported
@@ -164,11 +254,14 @@ lands.
 
 - Read `CLAUDE.md` first, then `docs/ARCHITECTURE.md`, `docs/SCORING.md`,
   `docs/DESIGN.md`, then this file, before writing any code.
-- **B2 is next.** Design the Postgres schema additions from
-  `docs/ARCHITECTURE.md` § "Data model", build the fixtures/odds polling
-  job (widening intervals → 15-minute intervals in the final 2 hours),
-  and get a real API key in hand early — both to build against real
-  responses and to resolve the Pinnacle/tier question B1 left open.
+- **B2's code is done; its live proof is pending a human trigger.** Once
+  `ingest-e2e.yml` has been run, read its output (fixtures/odds_snapshots
+  actually written, ingestion_health rows) and update this file with the
+  real result — especially whether `/v4/participants` resolved names
+  correctly (see "What works" above) and whether API-Football's real
+  fixture shape matches the synthetic test's assumptions. **B3 (de-vig
+  math) is next after that** — `fixtures/provider_probes/` already has
+  real Pinnacle odds payloads to test against.
 - Do not resume Amendment A (A3–A7, the social path) until B1–B7 are
   working end to end, per Amendment B's own priority. The code and
   research there don't rot; there's no urgency to touch them.
