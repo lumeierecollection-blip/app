@@ -299,24 +299,38 @@ pricing already does better.
     debug signing; `--build-number` from the run number; artifact named
     `tipster-<short-sha>.apk`; triggers on `push: [main]` +
     `workflow_dispatch` only). Bootstraps `android/` via `flutter
-    create` if absent (no native scaffold is committed — nothing in
-    this sandbox could generate or verify one), then
-    `scripts/patch_android_signing.py` wires Flutter's own documented
-    release-signing recipe into the generated `build.gradle`. That
-    script has 6 passing tests against a synthetic build.gradle (no
-    Flutter SDK to generate a real one) and fails loudly rather than
-    silently leaving debug signing in place if the generated file
-    doesn't match the expected shape — the single highest-risk untested
-    part of this task.
+    create` if absent, then `scripts/patch_android_signing.py` wires
+    Flutter's own documented release-signing recipe into the generated
+    Gradle file.
+  - **First live run (2026-08-13, run `31692878211`): real, informative
+    failure, since fixed.** Got further than expected before failing —
+    Flutter SDK setup, `flutter create`, and `flutter pub get` all
+    succeeded. `flutter analyze` then failed on 12
+    `prefer_const_constructors` lints (info-severity, but `flutter
+    analyze` still exits nonzero on them) across the empty-state
+    screens — fixed by adding `const` at each flagged constructor.
+    Separately, and more significantly: `flutter create` on current
+    stable Flutter (3.47.0) generates **`build.gradle.kts` (Kotlin
+    DSL)**, not the Groovy `build.gradle` `patch_android_signing.py`
+    originally targeted — that assumption was untestable without a real
+    generated file to check against, exactly the kind of gap this
+    project's "prove with CI, not guesses" pattern exists to catch. The
+    patch script is rewritten for Kotlin DSL's `signingConfigs {
+    create("release") { ... } }` syntax, tries multiple known shapes of
+    the default debug-signing line, and now prints the actual file
+    content on failure so any remaining mismatch is diagnosable from one
+    run instead of guessing again — 10 tests (was 6), still against a
+    synthetic file, still not a real Flutter-generated one. Fixes pushed
+    (commit `54c181f`); not yet re-run.
   - **Needs, before this can be called proven:** `ANDROID_KEYSTORE_BASE64`
     + `ANDROID_KEYSTORE_PASSWORD` + `ANDROID_KEY_ALIAS` +
-    `ANDROID_KEY_PASSWORD` (generate a real release keystore and add as
-    repo secrets — never commit it) and `API_BASE_URL` (needs a real
-    deployed backend host, which doesn't exist yet — B2–B6 have only
-    ever run against CI's throwaway Postgres or this sandbox's local
-    one), then a human trigger of `build-apk.yml` to see the real
-    result, exactly like every other live-infrastructure proof in this
-    project.
+    `ANDROID_KEY_PASSWORD` (a real release keystore was generated this
+    session and handed to the user directly, not committed anywhere) and
+    `API_BASE_URL` (currently a placeholder, `https://api.example.invalid`
+    — no real backend is deployed yet, so the app will show a real
+    connection-error screen once installed), then another human trigger
+    of `build-apk.yml` on this branch to see whether the Kotlin DSL fix
+    actually holds.
 
 ## What works
 
