@@ -1,0 +1,67 @@
+name: Verify Providers (B1b)
+
+# Manual-only: this hits metered, real third-party APIs and should never
+# run on every push. Confirms OddsPapi's real Pinnacle/1xBet coverage and
+# API-Football's real account limits, saves every raw response under
+# fixtures/provider_probes/ for later offline tests, and commits the
+# result back to the branch that triggered it.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    name: Probe live providers
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install test dependencies
+        run: pip install -r backend/requirements-dev.txt
+
+      - name: Run local-server tests first (fail fast before hitting real APIs)
+        run: python3 -m pytest scripts/tests/test_verify_providers.py -v
+
+      - name: Fail loudly if provider secrets are missing
+        run: |
+          if [ -z "${{ secrets.API_FOOTBALL_KEY }}" ] || [ -z "${{ secrets.ODDS_PROVIDER_API_KEY }}" ]; then
+            echo "::error::API_FOOTBALL_KEY and/or ODDS_PROVIDER_API_KEY repo secret is missing. Add both under Settings > Secrets and variables > Actions, then re-run."
+            exit 1
+          fi
+
+      - name: Probe live providers
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          ODDS_PROVIDER_API_KEY: ${{ secrets.ODDS_PROVIDER_API_KEY }}
+        run: python3 scripts/verify_providers.py
+
+      - name: Commit probe results
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add fixtures/provider_probes/
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Provider verification probe results ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
+            git push
+          fi
+
+      - name: Upload probe results as artifact too
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: provider-probe-results
+          path: fixtures/provider_probes/
+          retention-days: 30
