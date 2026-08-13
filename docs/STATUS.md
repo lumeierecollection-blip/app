@@ -133,22 +133,36 @@ repointed to strategies".
     Proven end-to-end against two local fake servers replaying
     realistic response shapes (2 tests) — full pipeline wiring is
     correct.
-  - **Not yet done:** the live end-to-end run against the *real* APIs.
-    `.github/workflows/ingest-e2e.yml` (manual-trigger, spins up a
-    throwaway Postgres 16 **service container** in CI — no persistent
-    Supabase/Neon needed to prove this, that's a separate, later
-    concern for actual recurring production ingestion) is written and
-    ready to trigger, same permission gap as `verify-providers.yml`
-    before it (can't dispatch it from this session — 403). **Needs a
-    human to trigger it from the Actions tab.**
-  - One thing this run will either confirm or correct, honestly flagged
-    rather than assumed: `OddsPapiProvider.resolve_participant_names()`
-    calls a `/v4/participants` endpoint whose exact shape isn't
-    live-confirmed (search results describe it existing but not its
-    parameters) — built as the best available guess following every
-    other confirmed endpoint's `?<idsParam>=X,Y&apiKey=...` convention.
-    If wrong, the live run will raise clearly (`HttpError`), not
-    silently mis-resolve team names.
+  - **Live end-to-end run: attempted, real result, partially proven.**
+    `ingest-e2e.yml` ran successfully (workflow run `31656631820`) —
+    all 80 tests passed against CI's real Postgres service container
+    too (not just this sandbox's), migrations applied cleanly, and
+    `run_once` completed without error. But the real result was
+    **`Fixtures processed: 0`** — API-Football genuinely returned 0
+    fixtures for "Premier League" in the next 14 days from the run's
+    real date, recorded correctly as `ingestion_health` status `empty`
+    (not `error` — proves that distinction actually holds in
+    production, not just in tests). Because there were no fixtures to
+    match, the pipeline correctly never called OddsPapi at all — so
+    **OddsPapi's real odds fetch, fixture matching, and storage are
+    still unproven against live data**, only against the local fake-server
+    test. Two explanations are possible and not yet distinguished: a
+    genuine scheduling gap (the 14-day window didn't happen to overlap
+    a fixture) or a real bug in league/season resolution (many
+    competitions are named "Premier League" across countries; API-
+    Football's `season` parameter convention wasn't independently
+    confirmed). Added `scripts/diagnose_fixtures.py` — prints every
+    league matching the search (not just the one this project's
+    resolver picked) and fixtures over a 90-day window with and without
+    a season filter — and a new step in `ingest-e2e.yml` that runs it
+    automatically. **Needs one more human-triggered run** to get the
+    real answer instead of guessing.
+  - Still unconfirmed for the same reason: `OddsPapiProvider.
+    resolve_participant_names()` calls a `/v4/participants` endpoint
+    whose exact shape isn't documented anywhere this session could
+    verify — built as the best available guess, will raise clearly
+    rather than silently mis-resolve team names if wrong. Won't be
+    exercised until a run actually finds fixtures to match.
 
 **Amendment C1 — mobile framework switched to Flutter (from Expo/React
 Native), before any mobile code existed.** Complete, this PR: docs only,

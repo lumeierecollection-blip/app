@@ -88,3 +88,9 @@ jobs:
           for row in conn.execute('SELECT platform, status, detail FROM ingestion_health ORDER BY run_at'):
               print(row)
           "
+
+      - name: Diagnose fixture window if the run above found nothing
+        if: always()
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+        run: python3 scripts/diagnose_fixtures.py
