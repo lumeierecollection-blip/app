@@ -40,6 +40,7 @@ class SettledSelection:
     settled_at: datetime
     closing_odds: float | None = None
     post_id: str | None = None
+    payout_fraction: float = 1.0  # < 1.0 only for quarter-line AH/totals half win/half loss (Task B6)
 
 
 def gradeable(selections: list[SettledSelection]) -> list[SettledSelection]:
@@ -47,15 +48,18 @@ def gradeable(selections: list[SettledSelection]) -> list[SettledSelection]:
 
 
 def compute_returns(selections: list[SettledSelection]) -> list[float]:
-    """odds_used - 1 for a win, -1 for a loss -- the exact §7 formula."""
+    """odds_used - 1 for a win, -1 for a loss -- the exact §7 formula,
+    scaled by payout_fraction for a quarter-line half win/half loss
+    (Task B6) -- a full win/loss has payout_fraction 1.0 and this is a
+    no-op for every other market."""
     returns = []
     for s in selections:
         if s.status == "won":
             if s.odds_used is None:
                 raise ValueError("a won selection must have odds_used set")
-            returns.append(s.odds_used - 1.0)
+            returns.append((s.odds_used - 1.0) * s.payout_fraction)
         elif s.status == "lost":
-            returns.append(-1.0)
+            returns.append(-1.0 * s.payout_fraction)
     return returns
 
 

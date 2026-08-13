@@ -34,6 +34,7 @@ def load_settled_selections(
             sel.verified_odds,
             st.settled_at,
             sel.post_id,
+            st.payout_fraction,
             (
                 SELECT os.odds FROM odds_snapshots os
                 WHERE os.fixture_id = sel.fixture_id
@@ -57,7 +58,8 @@ def load_settled_selections(
             odds_used=float(row[1]) if row[1] is not None else None,
             settled_at=row[2],
             post_id=str(row[3]) if row[3] is not None else None,
-            closing_odds=float(row[4]) if row[4] is not None else None,
+            payout_fraction=float(row[4]),
+            closing_odds=float(row[5]) if row[5] is not None else None,
         )
         for row in rows
     ]
