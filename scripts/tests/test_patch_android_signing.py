@@ -65,6 +65,28 @@ def test_patch_inserts_keystore_properties_loader():
     assert 'rootProject.file("key.properties")' in result
 
 
+def test_patch_places_imports_before_plugins_block():
+    # Real bug caught by the second live CI run: Kotlin requires imports
+    # to precede every other top-level statement. An earlier version of
+    # this script prepended the keystoreProperties loader in a way that
+    # put it (and thus executable code) ahead of the imports.
+    result = patch(SYNTHETIC_BUILD_GRADLE_KTS)
+    imports_index = result.index("import java.util.Properties")
+    plugins_index = result.index("plugins {")
+    assert imports_index < plugins_index
+
+
+def test_patch_places_keystore_properties_loader_after_plugins_and_before_android():
+    # Gradle requires the plugins {} block to be the first statement
+    # other than imports/comments -- the keystoreProperties loader must
+    # land after it, not before.
+    result = patch(SYNTHETIC_BUILD_GRADLE_KTS)
+    plugins_index = result.index("plugins {")
+    keystore_index = result.index("val keystoreProperties = Properties()")
+    android_index = result.index("android {")
+    assert plugins_index < keystore_index < android_index
+
+
 def test_patch_inserts_signing_configs_block_inside_android():
     result = patch(SYNTHETIC_BUILD_GRADLE_KTS)
     android_index = result.index("android {")

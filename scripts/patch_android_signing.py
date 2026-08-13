@@ -13,6 +13,17 @@ wrong and only correctable once a real generated file existed to check
 against, which nothing in this sandbox (no Flutter SDK) could produce.
 Rewritten for Kotlin DSL syntax as a result.
 
+**Ordering matters in Kotlin DSL** (a second real bug the same live run
+caught): imports must precede every other top-level statement, and
+Gradle additionally requires the `plugins { ... }` block to be the first
+statement after any imports/comments. The `keystoreProperties` loader
+therefore can't be prepended to the very top of the file alongside the
+imports -- it has to land *after* the original `plugins {}` block, right
+before `android {`. An earlier version of this script prepended both
+blocks to the front in two separate steps, which silently reversed their
+order and put executable code before the imports; Gradle's Kotlin
+compiler rejected it with "Expecting an element" at the `import` lines.
+
 This is the mechanism behind build-apk.yml's fix #1 (never silently fall
 back to debug signing): if the generated file doesn't contain a
 recognizable `signingConfig = signingConfigs.getByName("debug")` (or
@@ -71,8 +82,13 @@ def patch(build_gradle_text: str) -> str:
     text = build_gradle_text
     if "import java.util.Properties" not in text:
         text = IMPORTS_SNIPPET + text
-    text = KEYSTORE_PROPERTIES_SNIPPET + text
-    text = text.replace("android {", "android {\n" + SIGNING_CONFIG_SNIPPET, 1)
+    # The keystoreProperties loader must come after the plugins {} block
+    # (Gradle requires plugins {} to be the first statement other than
+    # imports/comments), so it's inserted immediately before "android {"
+    # -- never prepended to the top of the file alongside the imports.
+    text = text.replace(
+        "android {", KEYSTORE_PROPERTIES_SNIPPET + "android {\n" + SIGNING_CONFIG_SNIPPET, 1
+    )
 
     for debug_pattern in DEBUG_SIGNING_PATTERNS:
         if debug_pattern in text:
