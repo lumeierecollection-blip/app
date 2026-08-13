@@ -53,6 +53,11 @@ def test_apply_migrations_creates_all_tables(conn):
         "003_strategies.sql",
         "004_manual_checks.sql",
         "005_ingestion_health.sql",
+        "006_selections.sql",
+        "007_settlements.sql",
+        "008_strategy_scores.sql",
+        "009_slips.sql",
+        "010_audit_calls.sql",
     ]
 
     tables = {
@@ -67,13 +72,18 @@ def test_apply_migrations_creates_all_tables(conn):
         "strategies",
         "manual_checks",
         "ingestion_health",
+        "selections",
+        "settlements",
+        "strategy_scores",
+        "slips",
+        "audit_calls",
         "schema_migrations",
     } <= tables
 
 
 def test_apply_migrations_is_idempotent(conn):
     first = migrate.apply_migrations(conn)
-    assert len(first) == 5
+    assert len(first) == 10
     second = migrate.apply_migrations(conn)
     assert second == []
 
