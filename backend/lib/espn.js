@@ -189,6 +189,14 @@ export function dateKey(date) {
   return `${y}${m}${d}`;
 }
 
+/** "20260808" -> a UTC Date for that calendar day (the inverse of
+ * dateKey -- the pipeline groups pending selections by dateKey, then
+ * re-fetches results per day). */
+export function dateFromKey(key) {
+  if (!/^\d{8}$/.test(key)) throw new Error(`invalid date key: ${key}`);
+  return new Date(`${key.slice(0, 4)}-${key.slice(4, 6)}-${key.slice(6, 8)}T00:00:00.000Z`);
+}
+
 /** Upcoming fixtures (state 'pre') for a league. */
 export function upcomingFixtures(events) {
   return events.filter((e) => e.status.state === 'pre');

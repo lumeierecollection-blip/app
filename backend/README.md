@@ -1,68 +1,67 @@
-# Tipster Aggregator — Cloud backend
+# Tipster Aggregator — Cloud backend (Amendment E)
 
-Runs the odds-market scan 24/7 in the cloud: polls fixtures (API-Football)
-and sharp-book (Pinnacle, via OddsPapi) odds every `SCAN_INTERVAL_MS`,
-stores every price snapshot, flags value edges, settles selections once
-results exist, and scores strategies by ROI with CLV as the headline
-metric. Structured after
+The Amendment E backend: a free-Render-hosted Node process that follows
+Telegram tipster channels, parses each post into selections, settles them
+against key-less ESPN results, scores each **source** by ROI (CLV as the
+headline metric), and pushes an FCM notification to your phone the moment a
+**rated** source posts. No paid APIs anywhere on this path — see
+`docs/AMENDMENT_E.md` for the design and `docs/RUNBOOK.md` for the
+step-by-step deploy.
+
+Plain Node.js, no framework, one file per concern, no test-framework
+dependency (structured after
 [`lumeierecollection-blip/tradeapp`](https://github.com/lumeierecollection-blip/tradeapp)'s
-`signal_aggregator/server` (Prompt 8): plain Node.js, no framework, one file
-per concern, no test-framework dependency.
-
-This replaces this project's earlier FastAPI + self-run Postgres backend
-plan — see `docs/STATUS.md` for why.
+`signal_aggregator/server`). The odds-market stack this backend replaced
+(`lib/odds.js`, `lib/fixtures.js`, `lib/devig.js`, `lib/edge.js`,
+`lib/supabase.js`, `lib/scan.js`, and the `/api/slips`,
+`/api/manual-check*`, `/api/strategies` routes) is retired from active
+service but kept in git — see `docs/AMENDMENT_E.md` §"Retired from active
+service".
 
 ## API
 
 | Endpoint | Method | Purpose |
 |---|---|---|
-| `/api/slips` | GET | Current band A–E slips, from cache. |
-| `/api/strategies` | GET | Scored strategies (ROI, ROI CI, CLV, hit rate). |
-| `/api/manual-check/fair-price` | GET | Query params `fixture`, `market` → fair prices computed live from the sharp line. |
-| `/api/manual-check` | POST | Body `{"fixture", "market", "pick", "offeredOdds", "bookmaker", "line"?}` → edge + stake fraction, logged regardless of outcome. |
 | `/api/health` | GET | Uptime check. |
-| `/api/status` | GET | Scan config, last scan result/error, pending-settlement count. |
-| `/refresh` | POST | Manual trigger; forces a scan. |
+| `/api/status` | GET | Scan config, last scan result/error, **loud Telegram state** (session missing/expired is a hard error here, never "no posts"). |
+| `/api/sources` | GET | Tracked Telegram sources with their all-window score (ROI, ROI CI low, CLV, hit rate, rated/disqualified + reasons). |
+| `/api/posts` | GET | Recent ingested posts (`?limit=`), newest first, with parsed selection counts. |
+| `/api/register-device` | POST | Body `{"token", "appInstallId"?, "platform"?}` — registers an FCM token for pushes. |
+| `/refresh` | POST | Manual scan trigger; returns the scan summary. |
 
 ## How the scan works
 
 1. The server scans every `SCAN_INTERVAL_MS` (default 5 min), guarded
-   against overlapping runs (`cache.running`), same pattern as
-   `tradeapp/server.js`'s `scanChain`.
-2. Per configured competition: fetch upcoming fixtures, fetch sharp-book
-   odds, match them by team name + kickoff proximity, store every snapshot
-   (append-only — never overwritten), flag the closing line once a fixture
-   kicks off.
-3. Report how many selections are waiting on a result. **Settlement itself
-   is not automatic yet** — no confirmed API-Football (or other) endpoint
-   for finished-fixture scores exists in this project's history, so there
-   is no real result source to poll. This is a real, visible gap, not
-   hidden behind a fake success.
-4. Rescore every active strategy (30d/90d/all windows).
-5. Cache the result in memory with a TTL — `/api/slips` and `/api/strategies`
-   read the cache, not live from Supabase on every request.
+   against overlapping runs (`cache.running`).
+2. **Fixtures first** (per `ESPN_LEAGUES`, key-less ESPN scoreboard) so
+   verified odds are known *before* a selection is inserted — `selections`
+   are immutable after insert, with `verified_odds` written at insert time.
+3. **Telegram ingest**: poll each channel since its last message, store
+   posts (idempotent on `platform_post_id`), parse picks, insert selections.
+4. **Settle** pending selections against ESPN results (matched by
+   `provider_event_id`), writing the closing line to the `settlements` row.
+5. **Score** every active source (30d/90d/all windows), applying the §7
+   disqualifiers (post-kickoff capture rate, claimed-odds inflation,
+   post-result posting) — written onto `source_scores`.
+6. **Notify**: queue + send pushes for new posts from notifiable sources.
 
-There is no automated soft-book odds scanning (no second book polled
-alongside Pinnacle): `/api/manual-check` is the real, primary way a
-soft-book price enters this system — not a fallback for a missing scanner
-(no confirmed South African bookmaker coverage on the odds API, per
-`CLAUDE.md`).
+The never-silent rule applies everywhere: every ESPN fetch and Telegram poll
+records an `ingestion_health` row, and a missing/expired Telegram session is
+reported as a hard error on `/api/status`.
 
 ## Run it locally
 
 ```bash
 npm install
-SUPABASE_URL=... SUPABASE_SERVICE_KEY=... API_FOOTBALL_KEY=... ODDS_PROVIDER_API_KEY=... node server.js
+node server.js            # boots with no credentials; /api/status reports what's missing
 # then:
 curl http://localhost:8080/api/health
 curl http://localhost:8080/api/status
 ```
 
-`/api/health`, `/api/status`, and the root endpoint work with no
-credentials at all — the scan fails gracefully into `lastScanError`
-instead of crashing the process (verified locally: with no keys set, the
-server starts, listens, and reports the real error through `/api/status`
-rather than throwing).
+With no `TELEGRAM_*` env vars the server starts, listens, serves everything,
+and reports `telegram.state: "not configured"` on `/api/status` — it never
+crashes or pretends.
 
 Run the tests (`node --test`, no test framework dependency, matching
 `tradeapp`):
@@ -71,74 +70,50 @@ Run the tests (`node --test`, no test framework dependency, matching
 npm test
 ```
 
-114 tests: pure math (de-vig, edge detection, settlement including every
-Asian handicap quarter-line case, ROI/CLV/Wilson/bootstrap scoring) and
-provider parsing tests replayed against the real captured OddsPapi payload
-from this project's Task B1b (`fixtures/provider_probes/oddspapi_odds_pinnacle.json`)
-— not synthetic data. `lib/supabase.js` and the scan orchestration in
-`lib/scan.js` are thin glue over already-tested modules and are **not**
-independently tested here — they need a real Supabase project, which
-this sandbox doesn't have.
+187 tests: the pure-math engine carried over from the odds-market path
+(de-vig, edge detection, settlement including every Asian handicap
+quarter-line case, ROI/CLV/Wilson/bootstrap scoring) replayed against real
+captured provider payloads in `fixtures/`, plus the Amendment E modules —
+`lib/telegram.js` (FloodWait-aware poller with injected client), `lib/extract.js`
+(deterministic parser, synthetic samples in `fixtures/extract/tip_samples.json`),
+`lib/pipeline.js` + `lib/disqualifiers.js` (full end-to-end:
+ingest → verified odds → settle → score → notify), `lib/notify.js` (lazy
+firebase-admin), and a server boot test (`test/server.test.js`) that spawns
+the real server with a temp DB and exercises every route.
 
 ## Configuration (environment variables)
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PORT` | `8080` | HTTP port (Cloud Run injects `PORT=8080`). |
-| `CACHE_TTL_MS` | `600000` | How long `/api/slips`/`/api/strategies` are served without re-scanning. |
-| `SCAN_INTERVAL_MS` | `300000` | How often the server scans on its own (5 min). |
-| `COMPETITIONS` | `Premier League` | Comma-separated competition names to poll. |
-| `SUPABASE_URL` | – | Required. Your Supabase project URL. |
-| `SUPABASE_SERVICE_KEY` | – | Required. The **service role** key (server-side only — never ship this to the Flutter app). |
-| `API_FOOTBALL_KEY` | – | Required to scan. |
-| `ODDS_PROVIDER_API_KEY` | – | Required to scan. OddsPapi key. |
+| `PORT` | `8080` | HTTP port (Render sets `10000` via `render.yaml`). |
+| `DB_PATH` | `backend/data/tipster.db` | SQLite file path (persisted on Render's disk). |
+| `SCAN_INTERVAL_MS` | `300000` | Scan cadence (5 min). |
+| `ESPN_LEAGUES` | `eng.1` | Comma-separated ESPN league slugs to follow. Empty string = no network at all (used by the server test). |
+| `TELEGRAM_API_ID` | – | From my.telegram.org. |
+| `TELEGRAM_API_HASH` | – | From my.telegram.org. |
+| `TELEGRAM_SESSION` | – | Session string from `scripts/make_session.js`. The server also stores its refreshed session in the DB, so this env var is only the bootstrap. |
+| `TELEGRAM_CHANNELS` | – | Comma-separated channel usernames to follow (no `@`). Empty = Telegram not polled. |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` | – | Firebase service-account JSON (multi-line OK). When unset, the server runs everything except push. |
 
-## Supabase setup
+## Deploy
 
-1. Create a free project at https://supabase.com.
-2. In the SQL editor, run `supabase/migrations/20260813000001_schema.sql`
-   (or install the Supabase CLI and run `supabase db push` from this
-   directory).
-3. Copy the project URL and the **service_role** key (Settings → API) —
-   these are `SUPABASE_URL` and `SUPABASE_SERVICE_KEY`.
+Deploy on Render's free tier with the blueprint at `repo root/render.yaml`
+(root directory `backend`, Node runtime, `npm ci`, `node server.js`) — or
+with `backend/Dockerfile` on any Docker host. Secrets (`TELEGRAM_*`,
+`FIREBASE_SERVICE_ACCOUNT_JSON`) are `sync: false` so they're set in the
+Render dashboard, not committed.
 
-## Deploy to Google Cloud Run (free tier, nothing installed on your PC)
+Keep the free instance awake with a free UptimeRobot heartbeat on
+`/api/health` every 5 minutes (Render sleeps idle free instances, which
+would pause the scan loop).
 
-You need a free Google account. Use **Google Cloud Shell** (browser
-terminal at https://shell.cloud.google.com — no downloads). Cloud Run needs
-a billing account on the project; the free tier (2M requests/mo, 240k
-vCPU-seconds/mo) is comfortably enough for a scan every 5 minutes.
-
-```bash
-git clone https://github.com/YOURUSER/YOURREPO.git
-cd YOURREPO/backend
-
-gcloud projects create tipster-aggregator-backend --name="Tipster Aggregator Backend"
-gcloud config set project tipster-aggregator-backend
-# attach a billing account: https://console.cloud.google.com/billing/link
-gcloud services enable run.googleapis.com
-
-gcloud run deploy tipster-backend \
-  --source . \
-  --region us-central1 \
-  --allow-unauthenticated \
-  --max-instances 1 \
-  --memory 512Mi --cpu 1 \
-  --set-env-vars "SUPABASE_URL=...,SUPABASE_SERVICE_KEY=...,ODDS_PROVIDER_API_KEY=...,API_FOOTBALL_KEY=..."
-
-# prints a Service URL like https://tipster-backend-xxxx.a.run.app — copy it
-```
-
-Since Cloud Run scales to zero when idle, that's fine for a personal app —
-requests wake it. Don't set `--min-instances 1` unless idle latency
-actually bothers you; it costs more for no real benefit here.
-
-Never paste Supabase or provider keys into a shared/logged shell history —
-same discretion as this project's Android keystore handling.
+Full walkthrough — including creating the Telegram session, wiring Firebase,
+building the APK, and installing it — is in `docs/RUNBOOK.md`.
 
 ## Point the Flutter app at it
 
-Rebuild the APK with `--dart-define=API_BASE_URL=<your Cloud Run URL>` (see
-`.github/workflows/build-apk.yml`, which reads this from the `API_BASE_URL`
-repo secret) and reinstall. The Health screen should go green against the
-real deploy.
+Rebuild the APK with `--dart-define=API_BASE_URL=<your Render URL>` (see
+`.github/workflows/build-apk.yml`, which reads it from the `API_BASE_URL`
+repo secret) and reinstall. The app's Slips tab shows `/api/posts`, the
+Tipsters tab shows `/api/sources`, and it registers its FCM token via
+`/api/register-device` at first launch.

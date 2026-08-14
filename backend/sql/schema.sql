@@ -49,13 +49,17 @@ create index if not exists idx_posts_captured on posts (captured_at);
 -- gradeable is computed at insert time from the §7 rule: a selection is
 -- gradeable only if captured_at < kickoff_utc. oddsUsed (the scoring
 -- formula's input) = verified_odds when present, else claimed_odds.
--- closing_odds is the reference book's closing line for the same
--- market/pick, filled in post-match, used for CLV.
+-- provider_event_id is the ESPN event id the selection was parsed from --
+-- what settlement uses to match a finished result without name guessing.
+-- closing_odds (the reference book's closing line for the same market/pick,
+-- used for CLV) lives on the settlements row, not here: it is only known
+-- post-match, and selections are immutable.
 
 create table if not exists selections (
     id integer primary key autoincrement,
     post_id integer not null references posts (id),
     source_id integer not null references sources (id),
+    provider_event_id text,
     competition text,
     home text not null,
     away text not null,
@@ -66,7 +70,6 @@ create table if not exists selections (
     claimed_odds real check (claimed_odds is null or claimed_odds > 1.0),
     verified_odds real check (verified_odds is null or verified_odds > 1.0),
     verified_odds_source text,
-    closing_odds real,
     gradeable integer not null default 1,
     created_at text not null
 );
@@ -78,7 +81,10 @@ create index if not exists idx_selections_kickoff on selections (kickoff_utc);
 -- One row per settled selection. status/payout_fraction/rule_version match
 -- lib/settlement.js exactly so a rule fix can re-grade a target, not a
 -- rebuild. result_payload is the normalized result contract
--- ({matchStatus, goalsHome, goalsAway}).
+-- ({matchStatus, goalsHome, goalsAway}). closing_odds is the reference
+-- book's closing line for the same market/pick, read from the finished
+-- match's odds block at settlement time -- it feeds CLV and is written
+-- here so selections stay immutable.
 
 create table if not exists settlements (
     selection_id integer primary key references selections (id),
@@ -86,7 +92,8 @@ create table if not exists settlements (
     payout_fraction real not null default 1.0 check (payout_fraction > 0 and payout_fraction <= 1.0),
     settled_at text not null,
     result_payload text,
-    settlement_rule_version text not null
+    settlement_rule_version text not null,
+    closing_odds real
 );
 
 create index if not exists idx_settlements_settled_at on settlements (settled_at);
@@ -94,7 +101,10 @@ create index if not exists idx_settlements_settled_at on settlements (settled_at
 -- source_scores ----------------------------------------------------------
 -- Recomputed per (source_id, window). window is the same 30d/90d/all set
 -- as the old path. rated is derived (n_settled >= 50), stored implicitly
--- through n_settled -- the notification gate reads this table.
+-- through n_settled -- the notification gate reads this table. disqualified
+-- carries the §7 source-level disqualifiers (post-kickoff capture rate,
+-- claimed-odds inflation, posted-after-result); the notification gate
+-- requires rated AND not disqualified.
 
 create table if not exists source_scores (
     source_id integer not null references sources (id),
@@ -108,8 +118,25 @@ create table if not exists source_scores (
     mean_clv real,
     pct_positive_clv real,
     longest_losing_run integer,
+    disqualified integer not null default 0,
+    disqualification_reasons text,
     computed_at text not null,
     primary key (source_id, "window")
+);
+
+-- devices -----------------------------------------------------------------
+-- FCM registration tokens sent by the app via POST /api/register-device.
+-- token is unique; re-registration (reinstall, new login) just upserts the
+-- last_seen timestamp. app_install_id lets a future session reconcile
+-- stale tokens (uninstall detection) without guessing from the token.
+
+create table if not exists devices (
+    id integer primary key autoincrement,
+    token text not null unique,
+    app_install_id text,
+    platform text not null default 'android',
+    created_at text not null,
+    last_seen_at text not null
 );
 
 -- notifications ----------------------------------------------------------

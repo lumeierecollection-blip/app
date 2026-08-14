@@ -27,7 +27,7 @@ class _AppShellState extends State<AppShell> {
   Widget build(BuildContext context) {
     final screens = [
       SlipsScreen(apiClient: widget.apiClient),
-      const TipstersScreen(),
+      TipstersScreen(apiClient: widget.apiClient),
       const AuditScreen(),
       HealthScreen(apiClient: widget.apiClient),
       const AdminScreen(),

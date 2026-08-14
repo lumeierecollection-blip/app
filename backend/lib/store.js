@@ -48,7 +48,8 @@ export class Store {
     `);
     this._getPostByPlatformId = this.db.prepare('select * from posts where platform_post_id = ?');
     this._listPosts = this.db.prepare(`
-      select p.*, s.handle, s.display_name as source_display_name
+      select p.*, s.handle, s.display_name as source_display_name,
+             (select count(*) from selections sel where sel.post_id = p.id) as selection_count
       from posts p join sources s on s.id = p.source_id
       order by p.captured_at desc, p.id desc
       limit ?
@@ -56,25 +57,35 @@ export class Store {
 
     this._insertSelection = this.db.prepare(`
       insert into selections
-        (post_id, source_id, competition, home, away, kickoff_utc, market, pick, line,
-         claimed_odds, verified_odds, verified_odds_source, closing_odds, gradeable, created_at)
+        (post_id, source_id, provider_event_id, competition, home, away, kickoff_utc, market, pick, line,
+         claimed_odds, verified_odds, verified_odds_source, gradeable, created_at)
       values
-        (@postId, @sourceId, @competition, @home, @away, @kickoffUtc, @market, @pick, @line,
-         @claimedOdds, @verifiedOdds, @verifiedOddsSource, @closingOdds, @gradeable, @createdAt)
+        (@postId, @sourceId, @providerEventId, @competition, @home, @away, @kickoffUtc, @market, @pick, @line,
+         @claimedOdds, @verifiedOdds, @verifiedOddsSource, @gradeable, @createdAt)
     `);
     this._listSelections = this.db.prepare(`
       select * from selections where source_id = ? order by created_at desc
     `);
+    this._pendingSelections = this.db.prepare(`
+      select sel.*, p.posted_at as post_posted_at
+      from selections sel
+      join posts p on p.id = sel.post_id
+      left join settlements st on st.selection_id = sel.id
+      where st.selection_id is null
+        and sel.kickoff_utc < @before
+      order by sel.kickoff_utc asc
+    `);
 
     this._upsertSettlement = this.db.prepare(`
-      insert into settlements (selection_id, status, payout_fraction, settled_at, result_payload, settlement_rule_version)
-      values (@selectionId, @status, @payoutFraction, @settledAt, @resultPayload, @ruleVersion)
+      insert into settlements (selection_id, status, payout_fraction, settled_at, result_payload, settlement_rule_version, closing_odds)
+      values (@selectionId, @status, @payoutFraction, @settledAt, @resultPayload, @ruleVersion, @closingOdds)
       on conflict (selection_id) do update set
         status = excluded.status,
         payout_fraction = excluded.payout_fraction,
         settled_at = excluded.settled_at,
         result_payload = excluded.result_payload,
-        settlement_rule_version = excluded.settlement_rule_version
+        settlement_rule_version = excluded.settlement_rule_version,
+        closing_odds = excluded.closing_odds
     `);
 
     this._settledSelectionsForSource = this.db.prepare(`
@@ -83,7 +94,7 @@ export class Store {
         st.payout_fraction as payoutFraction,
         st.settled_at as settledAt,
         sel.post_id as postId,
-        sel.closing_odds as closingOdds,
+        st.closing_odds as closingOdds,
         coalesce(sel.verified_odds, sel.claimed_odds) as oddsUsed
       from selections sel
       join settlements st on st.selection_id = sel.id
@@ -96,10 +107,10 @@ export class Store {
     this._upsertSourceScore = this.db.prepare(`
       insert into source_scores
         (source_id, "window", n_settled, roi, roi_ci_low, roi_ci_high, hit_rate, avg_odds,
-         mean_clv, pct_positive_clv, longest_losing_run, computed_at)
+         mean_clv, pct_positive_clv, longest_losing_run, disqualified, disqualification_reasons, computed_at)
       values
         (@sourceId, @window, @nSettled, @roi, @roiCiLow, @roiCiHigh, @hitRate, @avgOdds,
-         @meanClv, @pctPositiveClv, @longestLosingRun, @computedAt)
+         @meanClv, @pctPositiveClv, @longestLosingRun, @disqualified, @disqualificationReasons, @computedAt)
       on conflict (source_id, "window") do update set
         n_settled = excluded.n_settled,
         roi = excluded.roi,
@@ -110,10 +121,40 @@ export class Store {
         mean_clv = excluded.mean_clv,
         pct_positive_clv = excluded.pct_positive_clv,
         longest_losing_run = excluded.longest_losing_run,
+        disqualified = excluded.disqualified,
+        disqualification_reasons = excluded.disqualification_reasons,
         computed_at = excluded.computed_at
     `);
     this._latestAllWindowScore = this.db.prepare(`
       select * from source_scores where source_id = ? and "window" = 'all' order by computed_at desc limit 1
+    `);
+
+    this._registerDevice = this.db.prepare(`
+      insert into devices (token, app_install_id, platform, created_at, last_seen_at)
+      values (@token, @appInstallId, @platform, @createdAt, @lastSeenAt)
+      on conflict (token) do update set
+        last_seen_at = excluded.last_seen_at,
+        app_install_id = coalesce(excluded.app_install_id, devices.app_install_id)
+    `);
+    this._listDevices = this.db.prepare('select token from devices');
+
+    this._captureStats = this.db.prepare(`
+      select count(*) as total, coalesce(sum(gradeable), 0) as gradeable
+      from selections where source_id = ?
+    `);
+    this._avgOddsInflation = this.db.prepare(`
+      select avg((claimed_odds - verified_odds) / verified_odds) as inflation
+      from selections
+      where source_id = ?
+        and gradeable = 1
+        and claimed_odds is not null
+        and verified_odds is not null
+    `);
+    this._postTimingRows = this.db.prepare(`
+      select p.posted_at as posted_at, sel.kickoff_utc as kickoff_utc
+      from selections sel
+      join posts p on p.id = sel.post_id
+      where sel.source_id = ?
     `);
 
     this._insertNotification = this.db.prepare(`
@@ -135,6 +176,9 @@ export class Store {
     `);
     this._markNotificationFailed = this.db.prepare(`
       update notifications set status = 'failed', sent_at = @sentAt where id = @id
+    `);
+    this._markNotificationSkipped = this.db.prepare(`
+      update notifications set status = 'skipped', sent_at = @sentAt where id = @id
     `);
 
     this._recordHealth = this.db.prepare(`
@@ -216,8 +260,9 @@ export class Store {
 
   /** Insert an immutable selection. gradeable is derived here from the §7
    * rule (captured_at < kickoff_utc) -- never passed in by a caller that
-   * could get it wrong. */
-  insertSelection({ postId, sourceId, competition = null, home, away, kickoffUtc, market, pick, line = null, claimedOdds = null, verifiedOdds = null, verifiedOddsSource = null, capturedAt, now = new Date() }) {
+   * could get it wrong. providerEventId is the ESPN event id the pick was
+   * parsed from (settlement matches on it, no name guessing). */
+  insertSelection({ postId, sourceId, providerEventId = null, competition = null, home, away, kickoffUtc, market, pick, line = null, claimedOdds = null, verifiedOdds = null, verifiedOddsSource = null, capturedAt, now = new Date() }) {
     if (!postId || !sourceId || !home || !away || !kickoffUtc || !market || !pick) {
       throw new Error('postId, sourceId, home, away, kickoffUtc, market, and pick are required');
     }
@@ -227,6 +272,7 @@ export class Store {
     const info = this._insertSelection.run({
       postId,
       sourceId,
+      providerEventId: providerEventId ?? null,
       competition: competition ?? null,
       home,
       away,
@@ -237,7 +283,6 @@ export class Store {
       claimedOdds: claimedOdds ?? null,
       verifiedOdds: verifiedOdds ?? null,
       verifiedOddsSource: verifiedOddsSource ?? null,
-      closingOdds: null,
       gradeable,
       createdAt: Store.ts(now),
     });
@@ -249,11 +294,20 @@ export class Store {
     return this._listSelections.all(sourceId);
   }
 
+  /** Selections past their kickoff with no settlement row yet -- the
+   * settlement sweep's input. `before` is an ISO-8601 UTC cutoff
+   * (kickoff < cutoff = the match has long since started). */
+  listPendingSelections({ before }) {
+    if (!before) throw new Error('before is required');
+    return this._pendingSelections.all({ before });
+  }
+
   // settlements -----------------------------------------------------------
 
-  upsertSettlement({ selectionId, status, payoutFraction = 1.0, settledAt, resultPayload = null, ruleVersion }) {
+  upsertSettlement({ selectionId, status, payoutFraction = 1.0, settledAt, resultPayload = null, ruleVersion, closingOdds = null }) {
     const allowed = ['won', 'lost', 'void', 'push', 'ungradeable'];
     if (!allowed.includes(status)) throw new Error(`status must be one of ${allowed.join(', ')}`);
+    if (closingOdds !== null && closingOdds !== undefined && !(closingOdds > 1.0)) throw new Error('closingOdds must be > 1.0 or null');
     this._upsertSettlement.run({
       selectionId,
       status,
@@ -261,6 +315,7 @@ export class Store {
       settledAt,
       resultPayload: resultPayload === null ? null : JSON.stringify(resultPayload),
       ruleVersion,
+      closingOdds: closingOdds ?? null,
     });
   }
 
@@ -287,6 +342,8 @@ export class Store {
       meanClv: score.meanClv,
       pctPositiveClv: score.pctPositiveClv,
       longestLosingRun: score.longestLosingRun,
+      disqualified: score.disqualified ? 1 : 0,
+      disqualificationReasons: score.disqualificationReasons?.length ? JSON.stringify(score.disqualificationReasons) : null,
       computedAt: Store.ts(computedAt),
     });
   }
@@ -295,6 +352,59 @@ export class Store {
    * (rated = n_settled >= 50 && roi_ci_low > 0). */
   latestAllWindowScore(sourceId) {
     return this._latestAllWindowScore.get(sourceId) ?? null;
+  }
+
+  // disqualifier inputs (computed here, interpreted by lib/disqualifiers.js)
+
+  /** {total, gradeable} across ALL selections for a source -- the §7
+   * post-kickoff capture-rate check needs the non-gradeable ones too,
+   * which never enter the scoring feed. */
+  captureStats(sourceId) {
+    const row = this._captureStats.get(sourceId);
+    return { total: row?.total ?? 0, gradeable: row?.gradeable ?? 0 };
+  }
+
+  /** Mean claimed-vs-verified inflation over gradeable selections that
+   * have both odds: (claimed - verified) / verified. Null when no such
+   * selection exists. */
+  avgOddsInflation(sourceId) {
+    const row = this._avgOddsInflation.get(sourceId);
+    return row?.inflation ?? null;
+  }
+
+  /** {total, afterResult} over gradeable selections, where afterResult
+   * counts a selection whose post was posted more than 120 minutes after
+   * kickoff (the "posted after the result was known" proxy -- documented
+   * approximation, not a precise result-time check). */
+  postTimingStats(sourceId, { resultGraceMs = 120 * 60 * 1000 } = {}) {
+    const rows = this._postTimingRows.all(sourceId);
+    let afterResult = 0;
+    for (const row of rows) {
+      const posted = row.posted_at ? new Date(row.posted_at).getTime() : null;
+      const kickoff = new Date(row.kickoff_utc).getTime();
+      if (posted !== null && Number.isFinite(posted) && posted - kickoff > resultGraceMs) afterResult += 1;
+    }
+    return { total: rows.length, afterResult };
+  }
+
+  // devices ---------------------------------------------------------------
+
+  /** Upsert a push-registration token (reinstall/re-login just bumps
+   * last_seen). Returns {created: boolean}. */
+  registerDevice({ token, appInstallId = null, platform = 'android', now = new Date() }) {
+    if (!token) throw new Error('token is required');
+    const info = this._registerDevice.run({
+      token,
+      appInstallId: appInstallId ?? null,
+      platform,
+      createdAt: Store.ts(now),
+      lastSeenAt: Store.ts(now),
+    });
+    return { created: info.changes > 0 };
+  }
+
+  listDeviceTokens() {
+    return this._listDevices.all().map((d) => d.token);
   }
 
   // notifications ---------------------------------------------------------
@@ -316,6 +426,12 @@ export class Store {
 
   markNotificationFailed({ id, sentAt = new Date() }) {
     this._markNotificationFailed.run({ id, sentAt: Store.ts(sentAt) });
+  }
+
+  /** A queued notification with no registered device can never be
+   * delivered -- mark it skipped so the queue doesn't grow unbounded. */
+  markNotificationSkipped({ id, sentAt = new Date() }) {
+    this._markNotificationSkipped.run({ id, sentAt: Store.ts(sentAt) });
   }
 
   // ingestion_health ------------------------------------------------------

@@ -1,15 +1,17 @@
-FROM node:20-alpine
+# Amendment E backend -- plain Node.js + better-sqlite3, deployed to Render
+# free tier (or any Docker host). glibc base (node:20-slim, NOT alpine) so
+# better-sqlite3's prebuilt binaries work without a compiler.
+
+FROM node:20-slim
 
 WORKDIR /app
 
-COPY package.json ./
-# Unlike tradeapp's Dockerfile (which skips this because firebase-admin is
-# lazily dynamic-imported and optional -- push works or doesn't depending on
-# whether it happens to be present), @supabase/supabase-js is this app's
-# primary datastore client, loaded unconditionally on every request. It has
-# to actually be installed.
-RUN npm install --omit=dev
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
+# Schema + all runtime code. server.js is the only entry point.
 COPY lib ./lib
+COPY sql ./sql
 COPY server.js ./
 
 ENV PORT=8080

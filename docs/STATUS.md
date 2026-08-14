@@ -3,51 +3,89 @@
 ## Current position
 
 **Amendment E (Prompt 9) — the no-API path: Telegram + ESPN + FCM push.
-E1 + E2 complete; E3–E8 pending.** The user asked for a cloud backend that
-runs without their PC and pushes a notification when a **trusted** (ROI-rated,
-≥50 settled, positive) provider posts a slip, with **no paid or registered
-APIs**. Full design: `docs/AMENDMENT_E.md`. Key live-confirmed facts behind
-it (verified 2026-08-14, real egress now works from this sandbox):
+E1–E8 all code-complete; backend fully tested (188 tests passing locally,
+including a real local server boot).** What's done and what still needs the
+user (all documented in `docs/RUNBOOK.md`):
 
 - **E1 — SQLite store. Done.** `backend/sql/schema.sql` + `backend/lib/store.js`
-  (better-sqlite3, added as the design's first dependency — no longer the
-  zero-dependency promise, flagged in `docs/AMENDMENT_E.md`). Tables:
-  `sources`, `posts`, `selections` (immutable, `gradeable` derived from the
-  §7 captured_at < kickoff rule), `settlements`, `source_scores`,
-  `notifications` (queued/sent/failed audit trail, deduped per post),
-  `ingestion_health`, `app_state` (Telegram StringSession persistence).
-  `settledSelectionsForSource()` returns exactly the shape
-  `scoreStrategy()` consumes. 22 tests.
-  - **Scope call made and recorded here:** `lib/scoring.js`'s
-    `disqualifiersForStrategy` throws on postId-carrying selections (its
-    designed guard against the unwired social path). Amendment E *is* that
-    path, so E5 must implement the post-backed disqualifiers
-    (deleted-post rate, post-kickoff capture rate, claimed-odds inflation,
-    posted-after-result) on the real data. Not done in E1 to keep the
-    proven module untouched — the E1 test asserts the feed shape instead
-    of forcing `scoreStrategy` on it.
+  (better-sqlite3). Tables: `sources`, `posts`, `selections` (immutable,
+  `gradeable` derived from the §7 captured_at < kickoff rule, `provider_event_id`,
+  `verified_odds` written at insert), `settlements` (`closing_odds` lives here,
+  not on the immutable selections row), `source_scores` (now with
+  `disqualified` + `disqualification_reasons`), `notifications` (queued/sent/
+  failed audit trail, deduped per post), `ingestion_health`, `app_state`
+  (Telegram StringSession persistence), `devices` (FCM tokens).
 - **E2 — ESPN key-less adapter. Done, live-proven.** `backend/lib/espn.js`:
   `GET https://site.api.espn.com/apis/site/v2/sports/soccer/<league>/scoreboard[?dates=YYYYMMDD]`
-  — fixtures, full-time results (scores + goal events), and DraftKings
-  odds (moneyline/total/spread with open+close), all normalized to decimal.
-  Defensive: shape changes become nulls/skips, never throws. Live-verified
-  twice this session (eng.1 + usa.1, results and odds). Real captured
-  responses committed under `fixtures/espn/`; 16 tests. Replaces both
-  OddsPapi and API-Football with zero keys. `scripts/verify_espn.js` is the
-  human-triggerable live re-verifier (add `scripts/package.json` to make it
-  ESM-clean).
-- Telegram via grammJS (`telegram` npm), extraction deterministic (no LLM),
-  storage SQLite on Render free tier, notifications via `firebase-admin`
-  FCM. `backend/lib/scoring.js` and `backend/lib/settlement.js` reused
-  unchanged.
-- Known honest gaps, all documented in the amendment: soft-book (not sharp)
-  reference line, 50-bet gate means a quiet phone for weeks, Render free
-  tier sleeps without a heartbeat (UptimeRobot fix documented), Telegram
-  session re-auth on redeploy, text-only extraction (no OCR).
+  — fixtures, full-time results, DraftKings odds (open+close), normalized to
+  decimal. Live-verified; real captures in `fixtures/espn/`. Also carries
+  `dateKey`/`dateFromKey` used by the pipeline to fetch results per day.
+- **E3 — Telegram poller. Done.** `backend/lib/telegram.js` (grammJS
+  `telegram@2.26.22`): injectable client/sleep for tests, FloodWait sleeps the
+  exact returned `seconds` then retries once, session read/write round-trips.
+  `scripts/make_session.js` interactively creates the `TELEGRAM_SESSION`
+  string (needs api_id/api_hash from my.telegram.org + the user's phone).
+  8 tests.
+- **E4 — Extraction parser. Done.** `backend/lib/extract.js`: deterministic,
+  no LLM — seeded `TEAM_ALIASES`, market grammar (beat/win/draw/over/under/
+  BTTS), odds token nearest the market phrase. 16 tests against synthetic
+  samples in `fixtures/extract/tip_samples.json` built on the real eng.1
+  fixture (Arsenal vs Coventry City, event 401879301).
+- **E5 — Pipeline + source-level disqualifiers. Done.** `backend/lib/pipeline.js`
+  (`ScanRunner.run`): fixtures first (so verified odds are known before the
+  immutable insert) → Telegram ingest (idempotent, session/last-msg persisted)
+  → settle pending against ESPN results (matched by `provider_event_id`,
+  closing line to settlements) → score all windows with disqualifier overrides
+  → queue + send pushes for notifiable sources. `backend/lib/disqualifiers.js`:
+  post-kickoff capture rate >10%, claimed-odds inflation >8%, any selection
+  posted >120 min after kickoff (the postTiming query counts **all**
+  selections, since a post-after-result tip is by definition ungradeable).
+  Deleted-post-rate disqualifier not computed (no deletion data) — documented.
+  `lib/scoring.js`'s `disqualifiersForStrategy` no longer throws (returns `[]`;
+  §7 checks now live in `lib/disqualifiers.js`). 8 tests incl. the end-to-end
+  ingest → verified 1.40 → 51 settled → 50 gradeable → roi 0.40, ci_low>0 →
+  notified flow.
+- **E6 — FCM notify. Done, mock-tested.** `backend/lib/notify.js`
+  (`firebase-admin@14.2.0` — note v14's modular API: `getApps`/`cert`/
+  `getMessaging`, not the old `apps`/`messaging()`). Lazy-loads Firebase so a
+  server without `FIREBASE_SERVICE_ACCOUNT_JSON` boots and runs everything
+  except push. 3 tests with a fake sender. Live send blocked on the user's
+  Firebase project (RUNBOOK §4).
+- **E7 — server.js + deploy. Done, local-boot tested.** `backend/server.js`
+  rewritten for Amendment E: `/api/health`, `/api/status` (loud Telegram
+  state — session missing/expired is a hard error, never "no posts"),
+  `/api/sources`, `/api/posts`, `POST /api/register-device`, `POST /refresh`,
+  guarded scan loop. Old odds-market routes retired. `render.yaml` blueprint
+  (Node runtime, free plan, secrets `sync: false`), `backend/Dockerfile`
+  switched to node:20-slim (glibc → better-sqlite3 prebuilds) + `sql/` copy,
+  `docs/RUNBOOK.md` (the full "get the app on your phone" walkthrough),
+  `backend/README.md` rewritten. 1 real-boot test (spawns the server with a
+  temp DB + no network env, exercises every route). Live deploy by user.
+- **E8 — Flutter repoint. Code written, NOT compiled (no Flutter SDK in this
+  sandbox) — verified by `flutter analyze`/`flutter test` in the CI build.**
+  `mobile/pubspec.yaml` adds `firebase_core ^4.13.0` + `firebase_messaging
+  ^16.5.0` (versions verified on pub.dev; sdk floor bumped to >=3.6.0);
+  `lib/services/push.dart` (lazy `Firebase.initializeApp()` — a build without
+  Firebase still boots — permission request, token → `/api/register-device`);
+  `lib/main.dart` kicks off push init; `lib/services/api_client.dart` adds
+  `fetchStatus`/`fetchSources`/`fetchPosts`/`registerDevice` + models;
+  Tipsters tab now lists `/api/sources` (ROI, CLV, hit, bets, and a
+  TRACKING/UNRATED/RATED/DISQUALIFIED badge); Slips tab now lists `/api/posts`
+  (raw text + selection count); the Manual price check button is gone
+  (`/api/manual-check*` retired). `.github/workflows/build-apk.yml` gains a
+  loud `GOOGLE_SERVICES_JSON` secret check + `scripts/patch_android_firebase.py`
+  (google-services plugin `4.4.4`, verified on maven central; both patch
+  scripts proven together against a synthetic Flutter template).
+- Known honest gaps, all documented in the amendment + RUNBOOK: soft-book (not
+  sharp) reference line, 50-bet gate means a quiet phone for weeks, Render
+  free tier sleeps without a heartbeat (UptimeRobot fix in RUNBOOK §3),
+  Telegram session re-auth on redeploy (RUNBOOK §2), text-only extraction
+  (no OCR).
 
-Not started: the backend still runs the retired Amendment B/D odds-market
-server (`backend/server.js`, Supabase, OddsPapi/API-Football keys). Build
-E3–E8 per `docs/AMENDMENT_E.md`'s task table, one PR each.
+The backend no longer runs the retired odds-market server: `backend/server.js`
+was rewritten for Amendment E, and `lib/odds.js`, `lib/fixtures.js`,
+`lib/devig.js`, `lib/edge.js`, `lib/supabase.js`, `lib/scan.js` +
+`backend/supabase/` are retired from active service (kept in git).
 
 **Task 0 — repo skeleton + `CLAUDE.md` + docs.** Complete.
 
@@ -374,11 +412,13 @@ pricing already does better.
   - **Needs, before this can be called proven:** `ANDROID_KEYSTORE_BASE64`
     + `ANDROID_KEYSTORE_PASSWORD` + `ANDROID_KEY_ALIAS` +
     `ANDROID_KEY_PASSWORD` (a real release keystore was generated this
-    session and handed to the user directly, not committed anywhere) and
+    session and handed to the user directly, not committed anywhere),
     `API_BASE_URL` (currently a placeholder, `https://api.example.invalid`
-    — no real backend is deployed yet, so the app will show a real
-    connection-error screen once installed), then another human trigger
-    of `build-apk.yml` on this branch to see whether the Kotlin DSL fix
+    — the Amendment E backend isn't deployed yet; see `docs/RUNBOOK.md` §1)
+    and — new for Amendment E — `GOOGLE_SERVICES_JSON` (base64 of the
+    Firebase `google-services.json`; the workflow now fails loudly without
+    it, see `docs/RUNBOOK.md` §4), then another human trigger of
+    `build-apk.yml` on this branch to see whether the Kotlin DSL fix
     actually holds.
 
 **Amendment D (Prompt 8) — backend retired and rebuilt as plain Node.js +

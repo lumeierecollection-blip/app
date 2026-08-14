@@ -241,16 +241,21 @@ path). `deferred_social/cli_runner.py` stays as-is.
 
 ## Task order (vertical slices, one PR each)
 
+Status as of 2026-08-14: E1–E8 all code-complete (backend: 188 tests passing
+locally including a real server boot; E8 Flutter is written but uncompiled
+here — no Flutter SDK — so `flutter analyze`/`test` in CI is the proof).
+Everything still needing the user is in `docs/RUNBOOK.md` and `docs/STATUS.md`.
+
 | # | Slice | Proven by |
 |---|---|---|
-| E1 | SQLite store + schema + `node --test` | Tests against real SQLite |
-| E2 | ESPN adapter (results + odds), defensive parsing | Live calls (egress works now), captured fixtures |
-| E3 | Telegram adapter (grammJS, StringSession, capture rules) | Fixture-driven tests; live session blocked on user creds — flagged |
-| E4 | Extraction parser + post→selection mapping | Real channel post samples (committed as fixtures) |
-| E5 | Settlement + scoring wired to sources | Real ESPN result replayed through settlement + scoring |
-| E6 | FCM notify + `/api/register-device` + notification audit | Mock Firebase; live blocked on Firebase project — flagged |
-| E7 | `server.js` routes + scan loop + Render deploy + runbook | Local boot; live deploy by user |
-| E8 | Flutter: FCM init + repoint screens | `flutter analyze`/`test` in CI |
+| E1 | SQLite store + schema + `node --test` | Tests against real SQLite — **done** |
+| E2 | ESPN adapter (results + odds), defensive parsing | Live calls (egress works now), captured fixtures — **done** |
+| E3 | Telegram adapter (grammJS, StringSession, capture rules) | Fixture-driven tests; live session blocked on user creds — **done**, flagged |
+| E4 | Extraction parser + post→selection mapping | Real channel post samples (committed as fixtures) — **done** |
+| E5 | Settlement + scoring wired to sources | Real ESPN result replayed through settlement + scoring — **done** |
+| E6 | FCM notify + `/api/register-device` + notification audit | Mock Firebase; live blocked on Firebase project — **done**, flagged |
+| E7 | `server.js` routes + scan loop + Render deploy + runbook | Local boot; live deploy by user — **done**, flagged |
+| E8 | Flutter: FCM init + repoint screens | `flutter analyze`/`test` in CI — **code written, CI is the proof** |
 
 ## Open questions for the user (defaults chosen, all reversible)
 

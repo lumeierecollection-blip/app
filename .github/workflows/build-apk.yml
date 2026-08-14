@@ -53,6 +53,13 @@ jobs:
             exit 1
           fi
 
+      - name: Fail loudly if the Firebase config is missing
+        run: |
+          if [ -z "${{ secrets.GOOGLE_SERVICES_JSON }}" ]; then
+            echo "::error::GOOGLE_SERVICES_JSON repo secret is missing. The app registers for push with Firebase (Amendment E); without it the build cannot apply google-services."
+            exit 1
+          fi
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
@@ -108,6 +115,14 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+
+      - name: Write google-services.json and wire the Firebase plugin
+        working-directory: mobile
+        run: |
+          echo "$GOOGLE_SERVICES_JSON" | base64 -d > android/app/google-services.json
+          python3 ../scripts/patch_android_firebase.py android/app/build.gradle.kts
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
 
       - name: Wire release signing into build.gradle.kts
         run: python3 scripts/patch_android_signing.py mobile/android/app/build.gradle.kts

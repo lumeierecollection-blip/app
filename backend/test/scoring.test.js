@@ -175,8 +175,8 @@ describe('disqualifiersForStrategy', () => {
     assert.deepEqual(disqualifiersForStrategy([make('won', 2.0), make('lost')]), []);
   });
 
-  it('throws for unhandled social-origin selections', () => {
-    assert.throws(() => disqualifiersForStrategy([make('won', 2.0, 1, null, 'some-post-id')]));
+  it('is a no-op for social-origin selections too -- the §7 disqualifiers are computed at the source level in lib/disqualifiers.js (Task E5), not from the scoring feed', () => {
+    assert.deepEqual(disqualifiersForStrategy([make('won', 2.0, 1, null, 'some-post-id')]), []);
   });
 });
 

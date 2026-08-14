@@ -1,64 +1,95 @@
-import http from 'node:http';
+/**
+ * Amendment E -- the no-API backend server (Task E7). Plain node:http, no
+ * framework, matching the codebase's Node port style. One process:
+ *
+ *  - a self-scheduled scan loop (ScanRunner from lib/pipeline.js), guarded
+ *    against overlap, every SCAN_INTERVAL_MS;
+ *  - a small JSON API for the Flutter app: /api/health, /api/status,
+ *    /api/sources, /api/posts, POST /api/register-device, POST /refresh.
+ *
+ * The old odds-market routes (/api/slips, /api/strategies,
+ * /api/manual-check*, Supabase keys) are retired from this file per
+ * docs/AMENDMENT_E.md §"Retired from active service".
+ *
+ * Boot order: DB -> Telegram poller (session from DB, else env) -> scan.
+ * Telegram is NOT required to boot: a missing session is reported loudly
+ * by /api/status (hard error, never "no posts") and every other function
+ * keeps working.
+ */
 
-import { NoSharpPriceError, evaluateManualCheck } from './lib/manualCheck.js';
-import { ingestFixturesAndOdds, rescoreAllStrategies, reportPendingSettlements } from './lib/scan.js';
-import { fetchLatestSharpQuotes, fetchSlips, fetchStrategyScores, recordManualCheck } from './lib/supabase.js';
+import http from 'node:http';
+import { fileURLToPath } from 'node:url';
+import { dirname, join, resolve } from 'node:path';
+
+import { Store } from './lib/store.js';
+import { TelegramPoller } from './lib/telegram.js';
+import { ScanRunner } from './lib/pipeline.js';
+import { createFcmNotifier } from './lib/notify.js';
+import { fetchScoreboard } from './lib/espn.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const PORT = Number(process.env.PORT || 8080);
-const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 10 * 60 * 1000);
+const DB_PATH = process.env.DB_PATH || join(__dirname, 'data', 'tipster.db');
 const SCAN_INTERVAL_MS = Number(process.env.SCAN_INTERVAL_MS || 5 * 60 * 1000);
-const API_FOOTBALL_KEY = process.env.API_FOOTBALL_KEY;
-const ODDS_PROVIDER_API_KEY = process.env.ODDS_PROVIDER_API_KEY;
-const COMPETITIONS = splitEnv(process.env.COMPETITIONS, ['Premier League']);
+const TELEGRAM_API_ID = process.env.TELEGRAM_API_ID;
+const TELEGRAM_API_HASH = process.env.TELEGRAM_API_HASH;
+const TELEGRAM_SESSION_ENV = process.env.TELEGRAM_SESSION;
+const CHANNELS = splitEnv(process.env.TELEGRAM_CHANNELS, []);
+const LEAGUES = splitEnv(process.env.ESPN_LEAGUES, ['eng.1']);
+const FIREBASE_SERVICE_ACCOUNT_JSON = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 
-let cache = { generatedAt: null, slips: [], strategies: [], pendingSettlements: 0, lastScanError: null, running: false };
-let scanChain = Promise.resolve();
-let quotaConsumedThisScan = 0;
+const store = new Store(DB_PATH);
+const telegramSession = store.getState('telegram.session') ?? TELEGRAM_SESSION_ENV ?? null;
+const poller =
+  TELEGRAM_API_ID && TELEGRAM_API_HASH
+    ? new TelegramPoller({ apiId: TELEGRAM_API_ID, apiHash: TELEGRAM_API_HASH, sessionString: telegramSession })
+    : null;
+const notifier = FIREBASE_SERVICE_ACCOUNT_JSON ? createFcmNotifier(FIREBASE_SERVICE_ACCOUNT_JSON) : null;
+
+const runner = new ScanRunner({ store, poller, espn: { fetchScoreboard }, notify: notifier });
+
+let cache = {
+  running: false,
+  lastScanAt: null,
+  lastScanSummary: null,
+  lastScanError: null,
+  telegramState: null, // 'not configured' | 'ok' | 'auth failed' | error message
+};
+
+async function connectTelegramOnce() {
+  if (!poller) return 'not configured';
+  if (poller.connected) return 'ok';
+  const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('Telegram connect timed out')), 30000));
+  try {
+    await Promise.race([poller.connect(), timeout]);
+    const user = await poller.checkAuth();
+    if (!user) return 'session invalid or expired (re-run scripts/make_session.js and update TELEGRAM_SESSION)';
+    const refreshed = poller.sessionString;
+    if (refreshed) store.setState('telegram.session', refreshed);
+    return 'ok';
+  } catch (err) {
+    return String(err?.message ?? err);
+  }
+}
 
 async function scan() {
-  if (cache.running) return scanChain;
-  const job = (async () => {
-    cache.running = true;
-    let lastScanError = null;
-    try {
-      if (!API_FOOTBALL_KEY || !ODDS_PROVIDER_API_KEY) {
-        throw new Error('API_FOOTBALL_KEY and ODDS_PROVIDER_API_KEY must both be set to scan');
-      }
+  if (cache.running) return;
+  cache.running = true;
+  try {
+    const telegramState = await connectTelegramOnce();
+    cache.telegramState = telegramState;
 
-      let requestsThisScan = 0;
-      for (const competition of COMPETITIONS) {
-        await ingestFixturesAndOdds({
-          apiFootballKey: API_FOOTBALL_KEY,
-          oddsPapiKey: ODDS_PROVIDER_API_KEY,
-          competition,
-        });
-        requestsThisScan += 1;
-      }
-      quotaConsumedThisScan = requestsThisScan;
-
-      const pendingSettlements = await reportPendingSettlements();
-      await rescoreAllStrategies();
-
-      const [strategies, slips] = await Promise.all([fetchStrategyScores(), fetchSlips()]);
-
-      cache = {
-        generatedAt: new Date().toISOString(),
-        strategies,
-        slips,
-        pendingSettlements,
-        lastScanError: null,
-        running: false,
-      };
-    } catch (err) {
-      lastScanError = String(err?.message || err);
-      console.error('scan failed:', lastScanError);
-      cache = { ...cache, lastScanError, running: false };
-    } finally {
-      cache.running = false;
-    }
-  })();
-  scanChain = job;
-  return job;
+    const summary = await runner.run({ channels: telegramState === 'ok' ? CHANNELS : [], leagues: LEAGUES });
+    cache.lastScanAt = new Date().toISOString();
+    cache.lastScanSummary = summary;
+    cache.lastScanError = null;
+  } catch (err) {
+    cache.lastScanError = String(err?.message || err);
+    console.error('scan failed:', cache.lastScanError);
+  } finally {
+    cache.running = false;
+  }
 }
 
 async function handle(req, res) {
@@ -70,105 +101,92 @@ async function handle(req, res) {
 
   try {
     if (req.method === 'GET' && path === '/api/health') {
-      return json(res, 200, {
-        ok: true,
-        service: 'tipster-aggregator-backend',
-        uptime: Math.round(process.uptime()),
-      });
+      return json(res, 200, { ok: true, service: 'tipster-agg-backend', uptime: Math.round(process.uptime()) });
     }
 
     if (req.method === 'GET' && path === '/api/status') {
+      const telegramHealth = store.listHealth({ platform: 'telegram', limit: 3 });
       return json(res, 200, {
-        service: 'tipster-aggregator-backend',
+        service: 'tipster-agg-backend',
         uptime: Math.round(process.uptime()),
         scanIntervalMs: SCAN_INTERVAL_MS,
-        competitions: COMPETITIONS,
-        generatedAt: cache.generatedAt,
-        pendingSettlements: cache.pendingSettlements,
+        leagues: LEAGUES,
+        channels: CHANNELS,
+        telegram: {
+          configured: !!poller,
+          sessionConfigured: !!(telegramSession ?? store.getState('telegram.session')),
+          state: cache.telegramState,
+          lastHealth: telegramHealth[0] ?? null,
+        },
+        firebase: { configured: !!notifier },
+        lastScanAt: cache.lastScanAt,
         lastScanError: cache.lastScanError,
-        apiRequestsLastScan: quotaConsumedThisScan,
+        lastScanSummary: cache.lastScanSummary,
       });
     }
 
-    if (req.method === 'GET' && path === '/api/slips') {
-      const stale = !cache.generatedAt || Date.now() - new Date(cache.generatedAt).getTime() > CACHE_TTL_MS;
-      if (stale) await scan();
-      return json(res, 200, { generatedAt: cache.generatedAt, slips: cache.slips });
+    if (req.method === 'GET' && path === '/api/sources') {
+      const sources = store.listSources().map((s) => {
+        const score = store.latestAllWindowScore(s.id);
+        return {
+          handle: s.handle,
+          displayName: s.display_name,
+          active: s.active,
+          firstSeen: s.first_seen,
+          score: score
+            ? {
+                nSettled: score.n_settled,
+                roi: score.roi,
+                roiCiLow: score.roi_ci_low,
+                roiCiHigh: score.roi_ci_high,
+                hitRate: score.hit_rate,
+                avgOdds: score.avg_odds,
+                meanClv: score.mean_clv,
+                pctPositiveClv: score.pct_positive_clv,
+                longestLosingRun: score.longest_losing_run,
+                rated: score.n_settled >= 50,
+                disqualified: !!score.disqualified,
+                disqualificationReasons: score.disqualification_reasons ? JSON.parse(score.disqualification_reasons) : [],
+                computedAt: score.computed_at,
+              }
+            : null,
+        };
+      });
+      return json(res, 200, { sources });
     }
 
-    if (req.method === 'GET' && path === '/api/strategies') {
-      const stale = !cache.generatedAt || Date.now() - new Date(cache.generatedAt).getTime() > CACHE_TTL_MS;
-      if (stale) await scan();
-      return json(res, 200, { generatedAt: cache.generatedAt, strategies: cache.strategies });
+    if (req.method === 'GET' && path === '/api/posts') {
+      const limit = Number(url.searchParams.get('limit') ?? 50) || 50;
+      return json(res, 200, { posts: store.listPosts({ limit }) });
     }
 
-    if (req.method === 'GET' && path === '/api/manual-check/fair-price') {
-      const fixtureId = url.searchParams.get('fixture');
-      const market = url.searchParams.get('market');
-      if (!fixtureId || !market) return json(res, 400, { error: 'fixture and market query params are required' });
-
-      const quotes = await fetchLatestSharpQuotes({ fixtureId, market });
-      if (quotes.length === 0) return json(res, 404, { error: `no sharp-book price yet for fixture ${fixtureId} market ${market}` });
-
-      const { devig, fairOdds } = await import('./lib/devig.js');
-      const sharpOdds = Object.fromEntries(quotes.map((q) => [q.selection, q.odds]));
-      const fairProbs = devig(sharpOdds);
-      const fairPrices = Object.fromEntries(Object.entries(fairProbs).map(([sel, p]) => [sel, fairOdds(p)]));
-      return json(res, 200, { fixtureId, market, fairPrices });
-    }
-
-    if (req.method === 'POST' && path === '/api/manual-check') {
+    if (req.method === 'POST' && path === '/api/register-device') {
       const body = await readJsonBody(req);
-      const { fixture, market, pick, offeredOdds, bookmaker, line } = body;
-      if (!fixture || !market || !pick || !offeredOdds || !bookmaker) {
-        return json(res, 400, { error: 'fixture, market, pick, offeredOdds, and bookmaker are required' });
-      }
-
-      const quotes = await fetchLatestSharpQuotes({ fixtureId: fixture, market });
-      try {
-        const result = evaluateManualCheck({
-          quotes,
-          fixtureId: fixture,
-          market,
-          pick,
-          enteredOdds: Number(offeredOdds),
-          enteredBookmaker: bookmaker,
-          now: new Date(),
-          line: line ?? null,
-        });
-        const id = await recordManualCheck(result);
-        return json(res, 200, {
-          id,
-          ...result,
-          rejections: result.rejections.map((r) => `${r.gate}: ${r.reason}`),
-        });
-      } catch (err) {
-        if (err instanceof NoSharpPriceError) return json(res, 404, { error: err.message });
-        return json(res, 400, { error: err.message });
-      }
+      const { token, appInstallId, platform } = body;
+      if (!token) return json(res, 400, { error: 'token is required' });
+      store.registerDevice({ token, appInstallId: appInstallId ?? null, platform: platform ?? 'android' });
+      return json(res, 200, { ok: true });
     }
 
     if (req.method === 'POST' && path === '/refresh') {
       await scan();
       return json(res, 200, {
         ok: true,
-        generatedAt: cache.generatedAt,
-        slipCount: cache.slips.length,
-        strategyCount: cache.strategies.length,
+        lastScanAt: cache.lastScanAt,
         lastScanError: cache.lastScanError,
+        summary: cache.lastScanSummary,
       });
     }
 
     if (req.method === 'GET' && (path === '/' || path === '')) {
       return json(res, 200, {
-        service: 'tipster-aggregator-backend',
+        service: 'tipster-agg-backend',
         endpoints: [
-          'GET /api/slips',
-          'GET /api/strategies',
-          'GET /api/manual-check/fair-price?fixture=&market=',
-          'POST /api/manual-check',
           'GET /api/health',
           'GET /api/status',
+          'GET /api/sources',
+          'GET /api/posts?limit=',
+          'POST /api/register-device',
           'POST /refresh',
         ],
       });
@@ -183,7 +201,7 @@ async function handle(req, res) {
 function setCors(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
     res.end();
@@ -226,8 +244,9 @@ function readBody(req) {
 }
 
 function splitEnv(raw, fallback) {
-  if (!raw) return fallback;
-  return raw.split(',').map((s) => s.trim()).filter(Boolean);
+  if (raw === undefined || raw === null) return fallback;
+  const parts = raw.split(',').map((s) => s.trim()).filter(Boolean);
+  return parts;
 }
 
 async function bootstrap() {
@@ -240,13 +259,22 @@ async function bootstrap() {
     }
   }, SCAN_INTERVAL_MS);
   console.log(
-    `scanner: every ${Math.round(SCAN_INTERVAL_MS / 1000)}s · competitions: ${COMPETITIONS.join(', ')} · ` +
-      `keys ${API_FOOTBALL_KEY && ODDS_PROVIDER_API_KEY ? 'configured' : 'MISSING'}`,
+    `scanner: every ${Math.round(SCAN_INTERVAL_MS / 1000)}s · leagues: ${LEAGUES.join(', ')} · channels: ${CHANNELS.join(', ')}`,
   );
 }
 
 const server = http.createServer(handle);
-server.listen(PORT, () => {
-  console.log(`tipster-aggregator-backend listening on :${PORT}`);
-  void bootstrap();
-});
+
+const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+export function start() {
+  server.listen(PORT, () => {
+    console.log(`tipster-agg-backend listening on :${PORT}`);
+    void bootstrap();
+  });
+}
+
+if (isMain) {
+  start();
+}
+
+export { server, cache, store };

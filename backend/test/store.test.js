@@ -113,7 +113,7 @@ describe('Store: selections (immutable, gradeable gate)', () => {
     assert.equal(sel.gradeable, 1);
     assert.equal(sel.claimed_odds, 1.85);
     assert.equal(sel.verified_odds, null);
-    assert.equal(sel.closing_odds, null);
+    assert.equal(sel.provider_event_id, null);
   });
 
   it('flags a selection captured after kickoff as not gradeable', () => {

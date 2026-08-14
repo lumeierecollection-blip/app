@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'app_shell.dart';
 import 'services/api_client.dart';
+import 'services/push.dart';
 import 'services/settings.dart';
 import 'theme/theme.dart';
 
@@ -14,9 +17,12 @@ import 'theme/theme.dart';
 const _apiBaseUrl = String.fromEnvironment('API_BASE_URL', defaultValue: '');
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
   final apiClient = ApiClient(baseUrl: _apiBaseUrl);
   final settings = AppSettings();
   settings.load();
+
+  unawaited(PushManager.init(apiClient: apiClient));
 
   runApp(
     MultiProvider(

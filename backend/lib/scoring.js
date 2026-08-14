@@ -191,18 +191,18 @@ export function pctPositiveClv(selections) {
   return values.filter((v) => v > 0).length / values.length;
 }
 
-/** The §7 disqualifiers are all defined in terms of a *post* -- selections
- * with no postId can't trigger any of them. Selections that do carry a
- * postId (social origin, once re-enabled) would need real post metadata
- * this shape doesn't carry yet, so this throws rather than silently doing
- * nothing. */
-export function disqualifiersForStrategy(selections) {
-  if (selections.some((s) => s.postId !== null && s.postId !== undefined)) {
-    throw new Error(
-      'social-origin selections found but post-based disqualifier checks are not wired up yet -- ' +
-        'the deferred social path (sources.social.enabled) is not re-enabled',
-    );
-  }
+/**
+ * **Disqualifiers** (deleted-post rate, post-kickoff capture rate, claimed
+ * odds inflation, posted-after-result) are all defined in terms of a
+ * *post*. This function is a no-op: the math here only ever scores the
+ * settled, gradeable feed, and the source-level disqualifier checks are
+ * computed against the full selection/post data by lib/disqualifiers.js
+ * (Amendment E, Task E5) and written onto the source_scores row -- the
+ * feed itself cannot carry enough information to compute them. The old
+ * throw (a guard against the un-wired social path) was removed because the
+ * social path is now wired; see docs/STATUS.md.
+ */
+export function disqualifiersForStrategy() {
   return [];
 }
 

@@ -7,7 +7,7 @@ publish_to: "none"
 version: 1.0.0+1
 
 environment:
-  sdk: ">=3.3.0 <4.0.0"
+  sdk: ">=3.6.0 <4.0.0"
 
 dependencies:
   flutter:
@@ -16,14 +16,22 @@ dependencies:
   # stack table -- no separate data-fetching library.
   provider: ^6.1.2
   # No HTTP client is named in CLAUDE.md's stack table; `http` is the
-  # standard, minimal package for talking to the FastAPI backend (Task
-  # B4's endpoints) -- flagged here the same way psycopg was flagged for
-  # the backend, rather than silently added.
+  # standard, minimal package for talking to the Node.js backend
+  # (Amendment E's /api/sources, /api/posts, /api/register-device) --
+  # flagged here the same way psycopg was flagged for the backend, rather
+  # than silently added.
   http: ^1.2.2
   # Local cache of selections/paper-betting results, matching tradeapp's
   # SharedPreferences-backed Storage pattern (docs/ARCHITECTURE.md
   # "Patterns to port from tradeapp").
   shared_preferences: ^2.3.2
+  # Amendment E push notifications (Task E8): firebase_messaging depends on
+  # firebase_core. Versions verified on pub.dev (firebase_messaging 16.5.0,
+  # firebase_core 4.13.0); google-services.json is injected into the APK
+  # build from the GOOGLE_SERVICES_JSON repo secret (see build-apk.yml).
+  # Push is optional at runtime -- a build without Firebase still boots.
+  firebase_core: ^4.13.0
+  firebase_messaging: ^16.5.0
 
 dev_dependencies:
   flutter_test:

@@ -1,0 +1,108 @@
+{
+  "note": "SYNTHETIC test samples for the Amendment E extraction parser (Task E4). No real Telegram channel posts have been captured yet (Telegram creds are a live-setup step, docs/RUNBOOK.md). These are realistic English-language tip-post forms, built around the real, live-captured eng.1 fixture (Arsenal vs Coventry City, kickoff 2026-08-21T19:00Z, event id 401879301) so team names, kickoff, and competition are the true ESPN values. They live here, clearly marked, and never on a production path.",
+  "fixture": {
+    "id": "401879301",
+    "league": "eng.1",
+    "date": "2026-08-21T19:00:00.000Z",
+    "home": { "name": "Arsenal", "abbreviation": "ARS" },
+    "away": { "name": "Coventry City", "abbreviation": "COV" }
+  },
+  "samples": [
+    {
+      "id": "ml-home",
+      "text": "Arsenal to beat Coventry City @ 1.35",
+      "media": false,
+      "expectPicks": [
+        { "market": "moneyline", "pick": "home", "line": null, "claimedOdds": 1.35, "confidence": 1.0 }
+      ],
+      "expectUnparsed": []
+    },
+    {
+      "id": "ml-away",
+      "text": "Coventry City to beat Arsenal @ 7.50",
+      "media": false,
+      "expectPicks": [
+        { "market": "moneyline", "pick": "away", "line": null, "claimedOdds": 7.5, "confidence": 1.0 }
+      ],
+      "expectUnparsed": []
+    },
+    {
+      "id": "totals-over",
+      "text": "Over 2.5 goals in Arsenal vs Coventry City @ 1.70",
+      "media": false,
+      "expectPicks": [
+        { "market": "totals", "pick": "over", "line": 2.5, "claimedOdds": 1.7, "confidence": 1.0 }
+      ],
+      "expectUnparsed": []
+    },
+    {
+      "id": "totals-under",
+      "text": "Under 2.5 goals, Arsenal vs Coventry City @ 2.10",
+      "media": false,
+      "expectPicks": [
+        { "market": "totals", "pick": "under", "line": 2.5, "claimedOdds": 2.1, "confidence": 1.0 }
+      ],
+      "expectUnparsed": []
+    },
+    {
+      "id": "btts-yes",
+      "text": "BTTS yes - Arsenal vs Coventry City @ 1.95",
+      "media": false,
+      "expectPicks": [
+        { "market": "btts", "pick": "yes", "line": null, "claimedOdds": 1.95, "confidence": 1.0 }
+      ],
+      "expectUnparsed": []
+    },
+    {
+      "id": "ml-draw",
+      "text": "Arsenal vs Coventry City - draw @ 5.50",
+      "media": false,
+      "expectPicks": [
+        { "market": "moneyline", "pick": "draw", "line": null, "claimedOdds": 5.5, "confidence": 1.0 }
+      ],
+      "expectUnparsed": []
+    },
+    {
+      "id": "no-value",
+      "text": "No value on this one, skip it.",
+      "media": false,
+      "expectPicks": [],
+      "expectUnparsed": ["no tracked fixture matched in post text"]
+    },
+    {
+      "id": "media-only",
+      "text": "",
+      "media": true,
+      "expectPicks": [],
+      "expectUnparsed": ["post has media but no text"]
+    },
+    {
+      "id": "ml-home-no-odds",
+      "text": "Arsenal vs Coventry City - Arsenal wins.",
+      "media": false,
+      "expectPicks": [
+        { "market": "moneyline", "pick": "home", "line": null, "claimedOdds": null, "confidence": 0.5 }
+      ],
+      "expectUnparsed": []
+    },
+    {
+      "id": "ml-home-alias",
+      "text": "Arsenal vs Coventry City - gunners to win @ 1.30",
+      "media": false,
+      "expectPicks": [
+        { "market": "moneyline", "pick": "home", "line": null, "claimedOdds": 1.3, "confidence": 1.0 }
+      ],
+      "expectUnparsed": []
+    },
+    {
+      "id": "multi-pick",
+      "text": "Arsenal to beat Coventry City @ 1.35 and over 2.5 goals @ 1.70",
+      "media": false,
+      "expectPicks": [
+        { "market": "moneyline", "pick": "home", "line": null, "claimedOdds": 1.35, "confidence": 1.0 },
+        { "market": "totals", "pick": "over", "line": 2.5, "claimedOdds": 1.7, "confidence": 1.0 }
+      ],
+      "expectUnparsed": []
+    }
+  ]
+}
