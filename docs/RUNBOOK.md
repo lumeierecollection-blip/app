@@ -15,6 +15,13 @@ backend can read it). Private/invite-only channels are not readable this way.
 Even with zero channels configured the app shows live fixtures and odds via
 the fixture-pulse feed entries, so a fresh deploy is never an empty screen.
 
+**The APK itself is standalone now too:** like tradeapp, it scans Telegram
+(`t.me/s`) and ESPN directly from the phone, with channels and an optional
+cloud URL managed **in-app on the Admin tab**. The build-time `API_BASE_URL`
+secret is optional — if set, it just pre-fills that Admin field. Deploying
+the Render backend (§1) remains what enables server-side pick parsing,
+tipster scoring, and push notifications.
+
 Time: ~20 minutes, most of it in browsers. Every external account is free.
 
 ---

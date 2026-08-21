@@ -30,7 +30,17 @@ class ApiClient {
   final String baseUrl;
   final http.Client _client;
 
-  Uri _uri(String path, [Map<String, String>? query]) => Uri.parse('$baseUrl$path').replace(queryParameters: query);
+  /// False when no cloud URL is configured (build-time or in-app). The app
+  /// works standalone without it (FeedLoader's on-device scan); only these
+  /// server-backed calls are unavailable.
+  bool get configured => baseUrl.trim().isNotEmpty;
+
+  Uri _uri(String path, [Map<String, String>? query]) {
+    if (!configured) {
+      throw ApiException(0, 'No cloud backend configured — set a URL on the Admin tab.');
+    }
+    return Uri.parse('$baseUrl$path').replace(queryParameters: query);
+  }
 
   Map<String, dynamic> _decode(http.Response response) {
     if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -175,7 +185,7 @@ class PostFeedEntry {
     required this.selectionCount,
   });
 
-  final int id;
+  final String id;
   final String sourceHandle;
   final String sourceDisplayName;
   final String rawText;
@@ -185,7 +195,9 @@ class PostFeedEntry {
 
   factory PostFeedEntry.fromJson(Map<String, dynamic> json) {
     return PostFeedEntry(
-      id: (json['id'] as num).toInt(),
+      // Cloud rows carry numeric ids; on-device scan rows use string ids
+      // ('tg-<channel>/<n>', 'pulse-<espnId>') -- both are opaque here.
+      id: json['id']?.toString() ?? '',
       sourceHandle: json['handle'] as String,
       sourceDisplayName: json['source_display_name'] as String? ?? json['handle'] as String,
       rawText: json['raw_text'] as String? ?? '',

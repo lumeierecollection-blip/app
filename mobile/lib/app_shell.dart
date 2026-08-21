@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'services/api_client.dart';
+import 'services/feed.dart';
 import 'screens/admin_screen.dart';
 import 'screens/audit_screen.dart';
 import 'screens/health_screen.dart';
@@ -12,9 +13,12 @@ import 'screens/tipsters_screen.dart';
 /// package at this scale. Tab labels match docs/DESIGN.md §11.8: Slips,
 /// Tipsters, Audit, plus Health and Admin.
 class AppShell extends StatefulWidget {
-  const AppShell({super.key, required this.apiClient});
+  const AppShell({super.key, required this.apiClient, this.feedLoader});
 
   final ApiClient apiClient;
+
+  /// Injectable for tests; null uses the real loader.
+  final FeedLoader? feedLoader;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -26,7 +30,7 @@ class _AppShellState extends State<AppShell> {
   @override
   Widget build(BuildContext context) {
     final screens = [
-      SlipsScreen(apiClient: widget.apiClient),
+      SlipsScreen(apiClient: widget.apiClient, loader: widget.feedLoader),
       TipstersScreen(apiClient: widget.apiClient),
       const AuditScreen(),
       HealthScreen(apiClient: widget.apiClient),

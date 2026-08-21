@@ -2,6 +2,40 @@
 
 ## Current position
 
+**Session 2026-08-21 (latest) — the app itself is standalone now (Amendment F
+completed on the mobile side).** The user hit `SocketException: api.example.invalid`
+on first launch: the APK had baked in the placeholder `API_BASE_URL` secret.
+Fix per user direction ("lets use the same without apis just on cloud backend"):
+ported tradeapp's actual model into our Flutter app, verified by reading the
+real tradeapp source —
+
+- **On-device Telegram scan** (`lib/services/telegram_source.dart`): fetches
+  `t.me/s/<channel>` from the phone and parses it (per-message slicing like
+  the backend parser; media-only messages skipped; entities cleaned). No
+  credentials, no backend. Channels are typed into **Admin** tab, stored in
+  SharedPreferences.
+- **On-device fixture context** (`lib/services/fixture_pulse.dart`): key-less
+  ESPN scoreboards fetched from the phone, rendered as clearly-labeled
+  display-only rows ("context from ESPN · not a tip"), never scored.
+- **Feed loading = tradeapp's refresh() shape** (`lib/services/feed.dart`):
+  cloud backend tried first when a URL is configured; any failure falls back
+  to the on-device scan with an honest banner ("Cloud feed offline — showing
+  on-device scan."). Standalone with no channels shows the fixture pulse plus
+  instructions.
+- **Admin tab** now edits channels + optional cloud URL; `API_BASE_URL`
+  dart-define merely pre-fills that field; build workflow's missing-URL gate
+  is warn-only. The old "No API_BASE_URL" boot wall is deleted — the app
+  always boots.
+- Tests updated/added (parser, feed fallback matrix with stubs, boot smoke);
+  verified by CI (`flutter analyze` + `flutter test` + release build) since
+  there is no local Flutter SDK.
+
+Still true from earlier today: backend rewritten tradeapp-style (commit
+`b27fae3`, run [`32472871627`](https://github.com/lumeierecollection-blip/app/actions/runs/32472871627)
+→ `tipster-b27fae3.apk`) — no database, no Telegram credentials, one dep.
+Deploying that backend to Render remains what enables pick parsing, tipster
+scores, and push; without it the app is a live read-only feed.
+
 **Session 2026-08-21 (later) — Amendment F: backend rewritten tradeapp-style
 (user request: "scrap the current backend and use the same as tradeapp").**
 The E-path's credential wall is gone: no SQLite store, no MTProto Telegram

@@ -1,42 +1,55 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../services/api_client.dart';
+import '../services/feed.dart';
+import '../services/settings.dart';
 import '../theme/type.dart';
 
-/// docs/DESIGN.md §11.8 screen 1, the home screen. Amendment E repoints it
-/// at the backend's /api/posts -- the recent Telegram posts the backend
-/// ingested and parsed, newest first. A post's `selection_count` is how many
-/// picks were extracted from it; the raw text is shown so nothing is hidden
-/// behind a fabricated slip shape. An empty list is the real state of a
-/// server that has ingested nothing yet (Amendment B7 removed demo mode).
+/// docs/DESIGN.md §11.8 screen 1, the home screen. Amendment F: loads like
+/// tradeapp's feed -- through the configured cloud backend when one is set,
+/// otherwise an on-device scan (t.me/s Telegram + ESPN fixtures). The raw
+/// text of every row is shown; nothing is fabricated behind it. On-device
+/// rows show "not parsed on-device" because pick extraction/settling/scoring
+/// are server-side features.
 class SlipsScreen extends StatefulWidget {
-  const SlipsScreen({super.key, required this.apiClient});
+  const SlipsScreen({super.key, required this.apiClient, this.loader});
 
   final ApiClient apiClient;
+
+  /// Injectable for tests; defaults to the real loader (cloud-first,
+  /// on-device fallback).
+  final FeedLoader? loader;
 
   @override
   State<SlipsScreen> createState() => _SlipsScreenState();
 }
 
 class _SlipsScreenState extends State<SlipsScreen> {
-  late Future<List<PostFeedEntry>> _future;
+  late final FeedLoader _loader = widget.loader ?? FeedLoader();
+  Future<FeedResult>? _future;
+  String _signature = '';
 
   @override
-  void initState() {
-    super.initState();
-    _future = widget.apiClient.fetchPosts();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final settings = context.watch<AppSettings>();
+    if (_future == null || settings.feedSignature != _signature) {
+      _signature = settings.feedSignature;
+      _reload();
+    }
   }
 
-  Future<void> _reload() async {
-    setState(() => _future = widget.apiClient.fetchPosts());
-    await _future;
+  void _reload() {
+    final settings = context.read<AppSettings>();
+    setState(() => _future = _loader.load(settings, widget.apiClient));
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Slips')),
-      body: FutureBuilder<List<PostFeedEntry>>(
+      body: FutureBuilder<FeedResult>(
         future: _future,
         builder: (context, snapshot) {
           if (snapshot.connectionState != ConnectionState.done) {
@@ -50,28 +63,40 @@ class _SlipsScreenState extends State<SlipsScreen> {
               ),
             );
           }
-          final posts = snapshot.data ?? const [];
+          final result = snapshot.data ?? const FeedResult([], null);
+          final posts = result.posts;
           if (posts.isEmpty) {
-            return const Center(
-              child: Padding(
-                padding: EdgeInsets.all(24),
-                child: Text(
-                  'No posts yet.\n\nThe backend follows the Telegram channels listed on the '
-                  'Tipsters tab and parses each post into selections. Check the Health tab for '
-                  'ingestion status.',
-                  style: AppType.body,
-                  textAlign: TextAlign.center,
+            return ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Text(result.notice ?? 'No posts yet.', style: AppType.body),
                 ),
-              ),
+              ],
             );
           }
-          return RefreshIndicator(
-            onRefresh: _reload,
-            child: ListView.builder(
-              physics: const AlwaysScrollableScrollPhysics(),
-              itemCount: posts.length,
-              itemBuilder: (context, i) => _PostCard(post: posts[i]),
-            ),
+          return Column(
+            children: [
+              if (result.notice != null)
+                Material(
+                  color: Theme.of(context).colorScheme.secondaryContainer,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: Text(result.notice!, style: AppType.label),
+                  ),
+                ),
+              Expanded(
+                child: RefreshIndicator(
+                  onRefresh: () async => _reload(),
+                  child: ListView.builder(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    itemCount: posts.length,
+                    itemBuilder: (context, i) => _PostCard(post: posts[i]),
+                  ),
+                ),
+              ),
+            ],
           );
         },
       ),
@@ -84,6 +109,8 @@ class _PostCard extends StatelessWidget {
 
   final PostFeedEntry post;
 
+  bool get _isPulse => post.sourceHandle == 'fixture-pulse';
+
   @override
   Widget build(BuildContext context) {
     return Card(
@@ -94,28 +121,28 @@ class _PostCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                Expanded(
-                  child: Text(post.sourceDisplayName, style: AppType.label),
-                ),
-                Text(
-                  _when(post.postedAt ?? post.capturedAt),
-                  style: AppType.label,
-                ),
+                Expanded(child: Text(post.sourceDisplayName, style: AppType.label)),
+                Text(_when(post.postedAt ?? post.capturedAt), style: AppType.label),
               ],
             ),
             const SizedBox(height: 8),
             Text(post.rawText, style: AppType.body),
             const SizedBox(height: 8),
             Text(
-              post.selectionCount == 1
-                  ? '1 selection parsed'
-                  : '${post.selectionCount} selections parsed',
+              _statusLine,
               style: AppType.label,
             ),
           ],
         ),
       ),
     );
+  }
+
+  String get _statusLine {
+    if (_isPulse) return 'context from ESPN · not a tip';
+    return post.selectionCount > 0
+        ? '${post.selectionCount} selection${post.selectionCount == 1 ? '' : 's'} parsed'
+        : 'raw post · not parsed on-device';
   }
 
   static String _when(String? iso) {

@@ -46,11 +46,12 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
-      - name: Fail loudly if the backend API URL is missing
+      - name: Note the backend API URL (optional since Amendment F)
         run: |
           if [ -z "${{ secrets.API_BASE_URL }}" ]; then
-            echo "::error::API_BASE_URL repo secret is missing. Demo mode was removed (Amendment B7) -- there is no fallback data to build against."
-            exit 1
+            echo "::warning::API_BASE_URL repo secret is empty -- building in standalone mode (Amendment F: on-device t.me/s scan + ESPN, tradeapp-style). The URL can also be set later in-app on the Admin tab; a baked-in value just pre-fills it."
+          else
+            echo "Baking API_BASE_URL into the build (pre-fills Admin tab's cloud field)."
           fi
 
       - name: Check Firebase config (warn only -- push disabled without it)
