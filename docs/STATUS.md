@@ -2,7 +2,34 @@
 
 ## Current position
 
-**Session 2026-08-21 (latest) — the app itself is standalone now (Amendment F
+**Session 2026-08-21 (latest) — multi-source feed accumulator shipped
+(user ask: "tips from different sites just like tradeapp... there is no
+information").** The home tab — renamed **Feed** — now accumulates every
+source, tradeapp's SourceRegistry shape, and works on first launch:
+
+- **Reddit tips** (`reddit_source.dart`): public JSON endpoints, no login,
+  honest User-Agent; defaults `r/SoccerBetting` + `r/sportsbook`, list
+  editable on the Admin tab.
+- **Telegram tips** (`telegram_source.dart`, from earlier today): t.me/s
+  preview scan of user-added channels.
+- **Football news context** (`rss_source.dart`): dependency-free RSS 2.0
+  reader (deliberately NOT tradeapp's `xml` package — no new deps without
+  asking); BBC Sport + Guardian football defaults. Rows are labeled
+  "news · not a tip" per the audit rule: context never renders as a
+  prediction and is never scored.
+- **ESPN fixtures** (`fixture_pulse.dart`): kickoff context, "not a tip".
+- Ordering is tips-first (newest first across Telegram+Reddit), context
+  appended below; global dedupe by id; per-source switches in Admin all
+  default ON so a fresh install shows real content immediately.
+- Cloud backend still wins when configured (`/api/posts`); any failure
+  falls back to the on-device scan with the loud
+  "Cloud feed offline — showing on-device scan." banner.
+- No new dependencies. Verified green in CI: run
+  [`32484238148`](https://github.com/lumeierecollection-blip/app/actions/runs/32484238148)
+  → analyze + tests + release build pass → **`tipster-683a8a2.apk`
+  (22.9 MB)**.
+
+**Session 2026-08-21 (earlier) — the app itself went standalone (Amendment F
 completed on the mobile side).** The user hit `SocketException: api.example.invalid`
 on first launch: the APK had baked in the placeholder `API_BASE_URL` secret.
 Fix per user direction ("lets use the same without apis just on cloud backend"):
