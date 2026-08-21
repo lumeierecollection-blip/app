@@ -11,12 +11,15 @@ step-by-step deploy.
 Plain Node.js, no framework, one file per concern, no test-framework
 dependency (structured after
 [`lumeierecollection-blip/tradeapp`](https://github.com/lumeierecollection-blip/tradeapp)'s
-`signal_aggregator/server`). The odds-market stack this backend replaced
-(`lib/odds.js`, `lib/fixtures.js`, `lib/devig.js`, `lib/edge.js`,
-`lib/supabase.js`, `lib/scan.js`, and the `/api/slips`,
-`/api/manual-check*`, `/api/strategies` routes) is retired from active
-service but kept in git — see `docs/AMENDMENT_E.md` §"Retired from active
-service".
+`signal_aggregator/server`, whose shape this directory mirrors exactly:
+`server.js` + `lib/*.js` + `test/*.test.js` + `Dockerfile`). The retired
+odds-market modules (`lib/odds.js`, `lib/fixtures.js`, `lib/devig.js`,
+`lib/edge.js`, `lib/manualCheck.js`, `lib/supabase.js`, `lib/scan.js`,
+the `supabase/migrations/` schema, and the `/api/slips`,
+`/api/manual-check*`, `/api/strategies` routes) have been removed from the
+tree entirely — recoverable from git history — so what remains here is only
+live code, the same as `tradeapp`. See `docs/AMENDMENT_E.md`
+§"Retired from active service".
 
 ## API
 
@@ -70,16 +73,15 @@ Run the tests (`node --test`, no test framework dependency, matching
 npm test
 ```
 
-187 tests: the pure-math engine carried over from the odds-market path
-(de-vig, edge detection, settlement including every Asian handicap
-quarter-line case, ROI/CLV/Wilson/bootstrap scoring) replayed against real
-captured provider payloads in `fixtures/`, plus the Amendment E modules —
-`lib/telegram.js` (FloodWait-aware poller with injected client), `lib/extract.js`
-(deterministic parser, synthetic samples in `fixtures/extract/tip_samples.json`),
-`lib/pipeline.js` + `lib/disqualifiers.js` (full end-to-end:
-ingest → verified odds → settle → score → notify), `lib/notify.js` (lazy
-firebase-admin), and a server boot test (`test/server.test.js`) that spawns
-the real server with a temp DB and exercises every route.
+129 tests: the carried-over settlement and scoring engine (settlement
+including every Asian handicap quarter-line case, ROI/CLV/Wilson/bootstrap
+scoring) plus the Amendment E modules — `lib/telegram.js` (FloodWait-aware
+poller with injected client), `lib/extract.js` (deterministic parser,
+synthetic samples in `fixtures/extract/tip_samples.json`), `lib/pipeline.js`
++ `lib/disqualifiers.js` (full end-to-end: ingest → verified odds → settle →
+score → notify), `lib/notify.js` (lazy firebase-admin), and a server boot
+test (`test/server.test.js`) that spawns the real server with a temp DB and
+exercises every route.
 
 ## Configuration (environment variables)
 

@@ -13,7 +13,6 @@
     "test": "node --test"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.112.3",
     "better-sqlite3": "^13.0.3",
     "firebase-admin": "^14.2.0",
     "telegram": "^2.26.22"
