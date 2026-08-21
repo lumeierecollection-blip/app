@@ -53,11 +53,14 @@ jobs:
             exit 1
           fi
 
-      - name: Fail loudly if the Firebase config is missing
+      - name: Check Firebase config (warn only -- push disabled without it)
+        id: firebase_check
         run: |
           if [ -z "${{ secrets.GOOGLE_SERVICES_JSON }}" ]; then
-            echo "::error::GOOGLE_SERVICES_JSON repo secret is missing. The app registers for push with Firebase (Amendment E); without it the build cannot apply google-services."
-            exit 1
+            echo "::warning::GOOGLE_SERVICES_JSON repo secret is missing -- building WITHOUT push notifications. The app installs and runs; FCM registration is skipped until the secret is added and the APK is rebuilt (docs/RUNBOOK.md §4)."
+            echo "has_firebase=0" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_firebase=1" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Set up Java
@@ -117,6 +120,7 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
 
       - name: Write google-services.json and wire the Firebase plugin
+        if: steps.firebase_check.outputs.has_firebase == '1'
         working-directory: mobile
         run: |
           echo "$GOOGLE_SERVICES_JSON" | base64 -d > android/app/google-services.json
