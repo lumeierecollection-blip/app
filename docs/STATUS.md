@@ -30,10 +30,13 @@ settle → score), `lib/push.js` (file-backed notifier, lazy FCM), thin
 RUNBOOK §1–§2 rewritten for the new flow (~20 min deploy, no my.telegram.org).
 
 **Still needed from the user:** redeploy the Render service (RUNBOOK §1 —
-the env var list shrank to four keys), then rebuild the APK so it points at
-the deployed URL. The APK from run `32466365763` predates nothing breaking —
-the API contract didn't change — but its `API_BASE_URL` must match wherever
-the new backend actually runs.
+the env var list shrank to four keys). The post-rewrite APK is already
+built and verified: run
+[`32472871627`](https://github.com/lumeierecollection-blip/app/actions/runs/32472871627)
+→ **`tipster-b27fae3.apk`** (21.8 MB) — proof the rewrite broke nothing on
+the mobile side. Its `API_BASE_URL` comes from the repo secret, so once the
+Render service is redeployed at the same URL the app points at, data flows
+with no further builds.
 
 **Session 2026-08-21 — the first real APK build succeeded.** Run
 [`32466365763`](https://github.com/lumeierecollection-blip/app/actions/runs/32466365763)
