@@ -55,10 +55,15 @@ class FeedLoader {
   Future<List<PostFeedEntry>> scanLocal(List<String> channels) async {
     final scanned = await _telegram.fetchChannels(channels);
     final pulse = await _fixturePulse.fetch();
-    final posts = <PostFeedEntry>[];
-    posts.addAll(scanned.map(_toFeedEntry));
-    posts.addAll(pulse);
-    posts.sort((a, b) => (b.postedAt ?? '').compareTo(a.postedAt ?? ''));
+    // Telegram posts (actual tips, newest first) always lead; fixture-pulse
+    // rows (upcoming kickoffs, which can carry a postedAt far in the future)
+    // are context and belong below them, not merged into one postedAt sort
+    // -- otherwise an upcoming fixture can outrank a tip posted minutes ago.
+    final posts = scanned.map(_toFeedEntry).toList()
+      ..sort((a, b) => (b.postedAt ?? '').compareTo(a.postedAt ?? ''));
+    final pulseSorted = List<PostFeedEntry>.from(pulse)
+      ..sort((a, b) => (b.postedAt ?? '').compareTo(a.postedAt ?? ''));
+    posts.addAll(pulseSorted);
     return posts;
   }
 

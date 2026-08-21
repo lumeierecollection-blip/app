@@ -42,7 +42,9 @@ class _SlipsScreenState extends State<SlipsScreen> {
 
   void _reload() {
     final settings = context.read<AppSettings>();
-    setState(() => _future = _loader.load(settings, widget.apiClient));
+    setState(() {
+      _future = _loader.load(settings, widget.apiClient);
+    });
   }
 
   @override
