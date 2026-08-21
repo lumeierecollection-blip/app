@@ -1,0 +1,44 @@
+{
+  "body": {
+    "errors": [],
+    "get": "status",
+    "paging": {
+      "current": 1,
+      "total": 1
+    },
+    "parameters": [],
+    "response": {
+      "requests": {
+        "current": 0,
+        "limit_day": 100
+      },
+      "subscription": {
+        "active": true,
+        "end": "2027-08-13T00:00:00+00:00",
+        "plan": "Free"
+      }
+    },
+    "results": 0
+  },
+  "headers": {
+    "CF-RAY": "a2a3a4fba9596897-SJC",
+    "Cache-Control": "no-store, no-cache, must-revalidate",
+    "Connection": "close",
+    "Content-Type": "application/json",
+    "Date": "Thu, 13 Aug 2026 00:36:15 GMT",
+    "Server": "cloudflare",
+    "Transfer-Encoding": "chunked",
+    "access-control-allow-credentials": "True",
+    "access-control-allow-headers": "x-rapidapi-key, x-apisports-key, x-rapidapi-host",
+    "access-control-allow-methods": "GET, OPTIONS",
+    "access-control-allow-origin": "*",
+    "cf-cache-status": "DYNAMIC",
+    "expires": "0",
+    "pragma": "no-cache",
+    "vary": "Accept-Encoding",
+    "x-ratelimit-limit": "10",
+    "x-ratelimit-remaining": "9",
+    "x-ratelimit-requests-limit": "100",
+    "x-ratelimit-requests-remaining": "100"
+  }
+}
