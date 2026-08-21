@@ -167,6 +167,7 @@ class _Badge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final score = this.score;
     if (score == null) {
       return _chip('TRACKING', AppColor.voided);
     }
