@@ -2,6 +2,39 @@
 
 ## Current position
 
+**Session 2026-08-21 (later) — Amendment F: backend rewritten tradeapp-style
+(user request: "scrap the current backend and use the same as tradeapp").**
+The E-path's credential wall is gone: no SQLite store, no MTProto Telegram
+client, no session string, no `make_session.js`. Telegram channels are now
+read through the public `t.me/s/<username>` preview page (the technique
+tradeapp uses), state lives in memory refreshed by a self-scheduled scan
+loop, device tokens / seen-post dedupe live in two small JSON files, and the
+only dependency is `firebase-admin` — exactly tradeapp's footprint. The API
+contract the Flutter app already speaks is unchanged (`/api/posts`,
+`/api/sources`, `/api/status`, `/api/health`, `/api/register-device`,
+`/refresh`), so **no mobile changes were needed**.
+
+What this buys: a fresh deploy shows real data with **zero configuration**
+— ESPN fixtures + DraftKings odds render as fixture-pulse feed entries even
+with no channels configured; adding channels is just a comma-separated list
+of public usernames in one env var. What was removed:
+`lib/store.js`, `lib/telegram.js`, `lib/pipeline.js`, `lib/disqualifiers.js`,
+`lib/notify.js`, their tests, `scripts/make_session.js`, `backend/sql/`,
+and the `better-sqlite3` + `telegram` dependencies (all recoverable from git
+history). What was kept unchanged because it's pure and already tested:
+`lib/espn.js`, `lib/extract.js`, `lib/settlement.js`, `lib/scoring.js`.
+New: `lib/sources.js` (t.me/s parser + fixture-pulse generator),
+`lib/aggregator.js` (scan state machine: ingest → verify odds at insert →
+settle → score), `lib/push.js` (file-backed notifier, lazy FCM), thin
+`server.js`. 102 tests pass locally including a real server boot;
+RUNBOOK §1–§2 rewritten for the new flow (~20 min deploy, no my.telegram.org).
+
+**Still needed from the user:** redeploy the Render service (RUNBOOK §1 —
+the env var list shrank to four keys), then rebuild the APK so it points at
+the deployed URL. The APK from run `32466365763` predates nothing breaking —
+the API contract didn't change — but its `API_BASE_URL` must match wherever
+the new backend actually runs.
+
 **Session 2026-08-21 — the first real APK build succeeded.** Run
 [`32466365763`](https://github.com/lumeierecollection-blip/app/actions/runs/32466365763)
 built, signed, and uploaded **`tipster-040d988.apk`** (21.8 MB) — the first

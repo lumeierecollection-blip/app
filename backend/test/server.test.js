@@ -15,10 +15,11 @@ function boot() {
     env: {
       ...process.env,
       PORT: String(PORT),
-      DB_PATH: join(dir, 'test.db'),
       SCAN_INTERVAL_MS: '60000',
       TELEGRAM_CHANNELS: '',
       ESPN_LEAGUES: '',
+      DEVICE_TOKENS_FILE: join(dir, 'tokens.json'),
+      SEEN_POSTS_FILE: join(dir, 'seen.json'),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -43,11 +44,10 @@ async function waitForHealth(timeoutMs = 20000) {
   throw new Error('server did not become healthy in time');
 }
 
-test('server boots with no telegram configured and serves the full API', async () => {
-  const { proc, dir } = boot();
-    await waitForHealth();
-    try {
-
+test('server boots with nothing configured and serves the full API', async () => {
+  const { proc, dir, stderr } = boot();
+  await waitForHealth();
+  try {
     const status = await (await fetch(`${BASE}/api/status`)).json();
     assert.equal(status.service, 'tipster-agg-backend');
     assert.equal(status.telegram.configured, false);
@@ -55,12 +55,15 @@ test('server boots with no telegram configured and serves the full API', async (
     assert.equal(status.scanIntervalMs, 60000);
     assert.deepEqual(status.leagues, []);
     assert.deepEqual(status.channels, []);
+    assert.equal(status.firebase.configured, false);
 
     const sources = await (await fetch(`${BASE}/api/sources`)).json();
     assert.ok(Array.isArray(sources.sources));
 
+    // With no leagues configured the pulse is empty too -- an honest empty
+    // feed, never fabricated rows.
     const posts = await (await fetch(`${BASE}/api/posts?limit=10`)).json();
-    assert.ok(Array.isArray(posts.posts));
+    assert.deepEqual(posts.posts, []);
 
     const reg = await fetch(`${BASE}/api/register-device`, {
       method: 'POST',
@@ -86,14 +89,20 @@ test('server boots with no telegram configured and serves the full API', async (
     assert.equal(refreshBody.ok, true);
     assert.ok(refreshBody.lastScanAt);
     assert.equal(refreshBody.lastScanError, null);
-    assert.equal(refreshBody.summary.postsIngested, 0);
+    assert.equal(refreshBody.summary.newPosts, 0);
     assert.equal(refreshBody.summary.selectionsSettled, 0);
+
+    const root = await (await fetch(`${BASE}/`)).json();
+    assert.ok(Array.isArray(root.endpoints));
   } finally {
     proc.kill();
     await new Promise((r) => {
       proc.once('exit', r);
       setTimeout(r, 5000);
     });
+    if (stderr && !stderr.includes('ExperimentalWarning')) {
+      console.error('server stderr:', stderr);
+    }
     rmSync(dir, { recursive: true, force: true });
   }
 });

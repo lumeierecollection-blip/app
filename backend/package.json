@@ -1,8 +1,8 @@
 {
   "name": "tipster-aggregator-backend",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "Cloud backend for the Tipster Aggregator odds-market app: de-vigs sharp-book prices, flags value edges, settles selections, and scores strategies by ROI/CLV. Structured after lumeierecollection-blip/tradeapp's signal_aggregator/server (Prompt 8).",
+  "description": "Cloud backend for the Tipster Aggregator app: follows public Telegram tipster channels via the t.me/s preview, parses picks against key-less ESPN fixtures/odds, settles against real results, and scores each channel by ROI with CLV as the headline metric. Structured after lumeierecollection-blip/tradeapp's signal_aggregator/server: in-memory cache, self-scheduled scan loop, JSON-file persistence, one dependency.",
   "type": "module",
   "main": "server.js",
   "engines": {
@@ -13,8 +13,6 @@
     "test": "node --test"
   },
   "dependencies": {
-    "better-sqlite3": "^13.0.3",
-    "firebase-admin": "^14.2.0",
-    "telegram": "^2.26.22"
+    "firebase-admin": "^14.2.0"
   }
 }

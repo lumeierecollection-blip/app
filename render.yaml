@@ -1,4 +1,4 @@
-# Render blueprint for the Amendment E backend (docs/RUNBOOK.md).
+# Render blueprint for the Amendment F backend (docs/RUNBOOK.md).
 # Deploy: Render dashboard -> New -> Blueprint, or `render.yaml` is auto-used
 # when you connect the repo. Free web service; Render sleeps it when idle and
 # the in-process scan loop wakes it on the next request (a POST /refresh or a
@@ -6,6 +6,11 @@
 #
 # Every secret is `sync: false` so Render pulls the current value from the
 # dashboard at each deploy instead of baking an old value into the service.
+#
+# Amendment F: no Telegram api_id/api_hash/session -- channels are read via
+# the public t.me/s preview, so TELEGRAM_CHANNELS is just a comma-separated
+# list of public channel usernames (e.g. "channel1,channel2"). Leave it
+# unset and the app still shows live fixtures via the fixture-pulse feed.
 
 services:
   - type: web
@@ -23,12 +28,6 @@ services:
       - key: SCAN_INTERVAL_MS
         value: 300000
       - key: TELEGRAM_CHANNELS
-        sync: false
-      - key: TELEGRAM_API_ID
-        sync: false
-      - key: TELEGRAM_API_HASH
-        sync: false
-      - key: TELEGRAM_SESSION
         sync: false
       - key: FIREBASE_SERVICE_ACCOUNT_JSON
         sync: false

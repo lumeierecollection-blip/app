@@ -1,4 +1,4 @@
-# RUNBOOK — getting the app on your phone (Amendment E, Tasks E3–E8)
+# RUNBOOK — getting the app on your phone (Amendment F)
 
 The end state: a free Render-hosted Node backend follows the Telegram
 tipster channels you name, parses each post into selections, settles them
@@ -7,7 +7,15 @@ notification only when a **rated** source (50+ settled, positive ROI) posts.
 Your phone gets a signed APK built by GitHub Actions, no local Flutter
 install needed.
 
-Time: ~40 minutes, most of it in browsers. Every external account is free.
+**Amendment F change:** Telegram is read through the public `t.me/s/<channel>`
+preview page — the same trick tradeapp uses. No `api_id`, no `api_hash`, no
+session string, no `make_session.js`. A channel works if its preview page is
+public (open `https://t.me/s/<username>` in a browser; if you see posts, the
+backend can read it). Private/invite-only channels are not readable this way.
+Even with zero channels configured the app shows live fixtures and odds via
+the fixture-pulse feed entries, so a fresh deploy is never an empty screen.
+
+Time: ~20 minutes, most of it in browsers. Every external account is free.
 
 ---
 
@@ -15,7 +23,6 @@ Time: ~40 minutes, most of it in browsers. Every external account is free.
 
 - A GitHub account (the repo `lumeierecollection-blip/app`).
 - A Render account (render.com → Sign up, free plan).
-- A Telegram account (the phone number you'll authenticate with).
 - A Google account (for Firebase).
 - An Android phone.
 
@@ -39,44 +46,38 @@ Time: ~40 minutes, most of it in browsers. Every external account is free.
    | `PORT` | `10000` |
    | `SCAN_INTERVAL_MS` | `300000` (scan every 5 minutes) |
    | `ESPN_LEAGUES` | `eng.1` (English Premier League — results + odds feed) |
-   | `TELEGRAM_API_ID` | *your api_id from §2* |
-   | `TELEGRAM_API_HASH` | *your api_hash from §2* |
-   | `TELEGRAM_SESSION` | *the session string from §2* |
-   | `TELEGRAM_CHANNELS` | *e.g. `tippingchannel1,tippingchannel2` (no @)* |
+   | `TELEGRAM_CHANNELS` | *e.g. `tippingchannel1,tippingchannel2` (no @; optional — see §2)* |
    | `FIREBASE_SERVICE_ACCOUNT_JSON` | *the Firebase service-account JSON from §4 (multi-line is fine)* |
 
 4. **Deploy**. When the deploy finishes, open
    `https://<your-app>.onrender.com/api/health` — it should return
-   `{"ok":true,...}`. Then open `/api/status` — it shows `telegram.state`
-   and the last scan. This endpoint is the honest health check: a missing or
-   expired Telegram session reports a **hard error there**, never "no posts".
+   `{"ok":true,...}`. Then open `/api/status` — it shows the last scan time,
+   per-league ESPN status, and whether Telegram/push are configured. This
+   endpoint is the honest health check: a misconfigured channel reports a
+   **hard error there**, never "no posts".
 
 Render's free tier sleeps the app after ~15 minutes idle, which would pause
 the scan loop. §3 keeps it awake.
 
 ---
 
-## 2. Telegram: get your api credentials + one-time session
+## 2. Telegram: pick public channels (no credentials needed)
 
-1. Go to **https://my.telegram.org** and sign in with your phone number.
-   - **API development tools → Create application** → note the
-     `api_id` and `api_hash`. (This is your personal app credential — never
-     commit it.)
-2. Create the session string **on your computer** (not on Render — it needs
-   your phone to approve the login):
-   - If you have Node ≥20 installed: `npm ci` in `backend/`, then
-     `node ../scripts/make_session.js`, enter api_id, api_hash, phone, and
-     the code Telegram texts you. It prints `TELEGRAM_SESSION=<long string>`.
-   - Paste the long string into Render's `TELEGRAM_SESSION` env var.
-3. In Render, set `TELEGRAM_CHANNELS` to the username(s) of the channels you
-   want to follow, comma-separated, without the leading `@`.
-4. Trigger a scan now: `POST https://<your-app>.onrender.com/refresh`
+1. For each channel you want to follow, open
+   `https://t.me/s/<username>` in your browser. If you can see the posts,
+   the backend can read them. If Telegram shows "preview not available",
+   the channel is private — it cannot be followed on this path.
+2. In Render, set `TELEGRAM_CHANNELS` to those usernames, comma-separated,
+   without the leading `@`.
+3. Trigger a scan now: `POST https://<your-app>.onrender.com/refresh`
    (or just wait up to `SCAN_INTERVAL_MS`). Then check `/api/status` →
-   `telegram.state` should read `"ok"`.
+   `telegram.state` should read `"ok"` and `lastScanSummary.newPosts`
+   should be non-zero on the first scan of an active channel.
 
-The server persists the session and refreshes it after each successful scan,
-so you only do this once unless the session invalidates (then: run
-`make_session.js` again, update `TELEGRAM_SESSION`, redeploy).
+That's the whole section — no my.telegram.org visit, no session string, no
+phone approval. A channel that later goes private simply stops yielding
+posts; `/api/status` shows the fetch error next scan rather than failing
+the whole scan.
 
 ---
 
@@ -161,7 +162,7 @@ The same 5-minute heartbeat keeps the in-process scan loop running.
 - **Only text posts parse.** Image-only tips can't be read without an OCR
   service (deliberately excluded: no paid APIs on this path).
 - If nothing ever ingests: `/api/status` is the diagnostic —
-  `telegram.state` (session), `lastScanAt`, `lastScanError`, and the
-  `telegram.lastHealth` entry tell you exactly which leg failed. The same
-  never-silent rule applies on the data side: every ESPN fetch and every
-  Telegram poll records an `ingestion_health` row.
+  `telegram.state`, `lastScanAt`, `lastScanError`, and the per-league
+  `espnStatus` entries tell you exactly which leg failed. (Amendment F
+  keeps no database, so there are no `ingestion_health` rows anymore —
+  the status snapshot is the record.)

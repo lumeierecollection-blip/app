@@ -1,95 +1,73 @@
 /**
- * Amendment E -- the no-API backend server (Task E7). Plain node:http, no
- * framework, matching the codebase's Node port style. One process:
+ * Amendment F -- the tradeapp-shaped server (user-directed rewrite: "scrap
+ * the current backend and use the same as tradeapp"). Plain node:http, no
+ * framework, no database -- state lives in an in-memory cache refreshed by
+ * a self-scheduled scan loop guarded against overlap (tradeapp's
+ * `cache.running`/`scanChain` pattern), and device tokens / seen posts live
+ * in small JSON files. The only dependency is firebase-admin, for optional
+ * push -- exactly tradeapp's dependency footprint.
  *
- *  - a self-scheduled scan loop (ScanRunner from lib/pipeline.js), guarded
- *    against overlap, every SCAN_INTERVAL_MS;
- *  - a small JSON API for the Flutter app: /api/health, /api/status,
- *    /api/sources, /api/posts, POST /api/register-device, POST /refresh.
+ * The API contract the Flutter app already speaks is unchanged:
+ *   GET  /api/health          GET  /api/status
+ *   GET  /api/sources         GET  /api/posts?limit=
+ *   POST /api/register-device POST /refresh
  *
- * The old odds-market routes (/api/slips, /api/strategies,
- * /api/manual-check*, Supabase keys) are retired from this file per
- * docs/AMENDMENT_E.md §"Retired from active service".
- *
- * Boot order: DB -> Telegram poller (session from DB, else env) -> scan.
- * Telegram is NOT required to boot: a missing session is reported loudly
- * by /api/status (hard error, never "no posts") and every other function
- * keeps working.
+ * Data flows with ZERO credentials: ESPN scoreboards are key-less, and
+ * Telegram channels are read through the public t.me/s preview (no
+ * api_id/api_hash/session). Set TELEGRAM_CHANNELS to follow tipster
+ * channels; without it the app still shows live fixtures via the
+ * fixture-pulse feed entries.
  */
 
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 
-import { Store } from './lib/store.js';
-import { TelegramPoller } from './lib/telegram.js';
-import { ScanRunner } from './lib/pipeline.js';
-import { createFcmNotifier } from './lib/notify.js';
-import { fetchScoreboard } from './lib/espn.js';
+import { createAggregator } from './lib/aggregator.js';
+import { PushNotifier, pushConfigured, pushStatus } from './lib/push.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const PORT = Number(process.env.PORT || 8080);
-const DB_PATH = process.env.DB_PATH || join(__dirname, 'data', 'tipster.db');
+const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 10 * 60 * 1000);
 const SCAN_INTERVAL_MS = Number(process.env.SCAN_INTERVAL_MS || 5 * 60 * 1000);
-const TELEGRAM_API_ID = process.env.TELEGRAM_API_ID;
-const TELEGRAM_API_HASH = process.env.TELEGRAM_API_HASH;
-const TELEGRAM_SESSION_ENV = process.env.TELEGRAM_SESSION;
-const CHANNELS = splitEnv(process.env.TELEGRAM_CHANNELS, []);
 const LEAGUES = splitEnv(process.env.ESPN_LEAGUES, ['eng.1']);
-const FIREBASE_SERVICE_ACCOUNT_JSON = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+const CHANNELS = splitEnv(process.env.TELEGRAM_CHANNELS, []);
+const DEVICE_TOKENS_FILE =
+  process.env.DEVICE_TOKENS_FILE || resolve(__dirname, 'device_tokens.json');
+const SEEN_POSTS_FILE = process.env.SEEN_POSTS_FILE || resolve(__dirname, 'seen_posts.json');
 
-const store = new Store(DB_PATH);
-const telegramSession = store.getState('telegram.session') ?? TELEGRAM_SESSION_ENV ?? null;
-const poller =
-  TELEGRAM_API_ID && TELEGRAM_API_HASH
-    ? new TelegramPoller({ apiId: TELEGRAM_API_ID, apiHash: TELEGRAM_API_HASH, sessionString: telegramSession })
-    : null;
-const notifier = FIREBASE_SERVICE_ACCOUNT_JSON ? createFcmNotifier(FIREBASE_SERVICE_ACCOUNT_JSON) : null;
+const aggregator = createAggregator({ leagues: LEAGUES, channels: CHANNELS });
+const notifier = new PushNotifier({ tokenFile: DEVICE_TOKENS_FILE, seenFile: SEEN_POSTS_FILE });
 
-const runner = new ScanRunner({ store, poller, espn: { fetchScoreboard }, notify: notifier });
-
-let cache = {
-  running: false,
-  lastScanAt: null,
-  lastScanSummary: null,
-  lastScanError: null,
-  telegramState: null, // 'not configured' | 'ok' | 'auth failed' | error message
-};
-
-async function connectTelegramOnce() {
-  if (!poller) return 'not configured';
-  if (poller.connected) return 'ok';
-  const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('Telegram connect timed out')), 30000));
-  try {
-    await Promise.race([poller.connect(), timeout]);
-    const user = await poller.checkAuth();
-    if (!user) return 'session invalid or expired (re-run scripts/make_session.js and update TELEGRAM_SESSION)';
-    const refreshed = poller.sessionString;
-    if (refreshed) store.setState('telegram.session', refreshed);
-    return 'ok';
-  } catch (err) {
-    return String(err?.message ?? err);
-  }
-}
+let cache = { running: false };
+let scanChain = Promise.resolve();
+let bootstrapped = false;
 
 async function scan() {
-  if (cache.running) return;
-  cache.running = true;
-  try {
-    const telegramState = await connectTelegramOnce();
-    cache.telegramState = telegramState;
+  if (cache.running) return scanChain;
+  const job = (async () => {
+    cache.running = true;
+    try {
+      const summary = await aggregator.scan();
 
-    const summary = await runner.run({ channels: telegramState === 'ok' ? CHANNELS : [], leagues: LEAGUES });
-    cache.lastScanAt = new Date().toISOString();
-    cache.lastScanSummary = summary;
-    cache.lastScanError = null;
-  } catch (err) {
-    cache.lastScanError = String(err?.message || err);
-    console.error('scan failed:', cache.lastScanError);
-  } finally {
-    cache.running = false;
-  }
+      // Push fresh real posts once, after the first scan has bootstrapped.
+      // Fixture-pulse entries are display-only and never pushed; the
+      // notifier's seen-set does the actual dedupe.
+      if (bootstrapped) {
+        const fresh = notifier.process(aggregator.state.posts);
+        if (fresh.length) {
+          const { attempted, ok } = await notifier.push(fresh);
+          console.log(`[push] ${fresh.length} new post(s) · ${ok}/${attempted} delivered`);
+        }
+      }
+      return summary;
+    } finally {
+      cache.running = false;
+    }
+  })();
+  scanChain = job;
+  return job;
 }
 
 async function handle(req, res) {
@@ -97,84 +75,70 @@ async function handle(req, res) {
   const path = url.pathname;
 
   setCors(req, res);
-  if (req.method === 'OPTIONS') return;
 
   try {
     if (req.method === 'GET' && path === '/api/health') {
-      return json(res, 200, { ok: true, service: 'tipster-agg-backend', uptime: Math.round(process.uptime()) });
+      return json(res, 200, {
+        ok: true,
+        service: 'tipster-agg-backend',
+        uptime: Math.round(process.uptime()),
+      });
     }
 
     if (req.method === 'GET' && path === '/api/status') {
-      const telegramHealth = store.listHealth({ platform: 'telegram', limit: 3 });
+      const snapshot = aggregator.statusSnapshot();
+      const push = pushStatus();
       return json(res, 200, {
         service: 'tipster-agg-backend',
         uptime: Math.round(process.uptime()),
         scanIntervalMs: SCAN_INTERVAL_MS,
-        leagues: LEAGUES,
-        channels: CHANNELS,
-        telegram: {
-          configured: !!poller,
-          sessionConfigured: !!(telegramSession ?? store.getState('telegram.session')),
-          state: cache.telegramState,
-          lastHealth: telegramHealth[0] ?? null,
-        },
-        firebase: { configured: !!notifier },
-        lastScanAt: cache.lastScanAt,
-        lastScanError: cache.lastScanError,
-        lastScanSummary: cache.lastScanSummary,
+        ...snapshot,
+        firebase: { configured: pushConfigured(), enabled: push.enabled, reason: push.reason ?? null },
+        deviceCount: notifier.tokens.length,
       });
     }
 
     if (req.method === 'GET' && path === '/api/sources') {
-      const sources = store.listSources().map((s) => {
-        const score = store.latestAllWindowScore(s.id);
-        return {
-          handle: s.handle,
-          displayName: s.display_name,
-          active: s.active,
-          firstSeen: s.first_seen,
-          score: score
-            ? {
-                nSettled: score.n_settled,
-                roi: score.roi,
-                roiCiLow: score.roi_ci_low,
-                roiCiHigh: score.roi_ci_high,
-                hitRate: score.hit_rate,
-                avgOdds: score.avg_odds,
-                meanClv: score.mean_clv,
-                pctPositiveClv: score.pct_positive_clv,
-                longestLosingRun: score.longest_losing_run,
-                rated: score.n_settled >= 50,
-                disqualified: !!score.disqualified,
-                disqualificationReasons: score.disqualification_reasons ? JSON.parse(score.disqualification_reasons) : [],
-                computedAt: score.computed_at,
-              }
-            : null,
-        };
-      });
-      return json(res, 200, { sources });
+      return json(res, 200, aggregator.sourcesPayload());
     }
 
     if (req.method === 'GET' && path === '/api/posts') {
+      // Serve-and-refresh on staleness, like tradeapp's /api/signals: a free
+      // host that slept overnight repopulates on the first request instead
+      // of serving a stale empty feed.
+      const generatedAt = aggregator.state.generatedAt;
+      const stale =
+        !generatedAt || Date.now() - new Date(generatedAt).getTime() > CACHE_TTL_MS;
+      if (stale) {
+        await scan();
+      }
       const limit = Number(url.searchParams.get('limit') ?? 50) || 50;
-      return json(res, 200, { posts: store.listPosts({ limit }) });
+      return json(res, 200, { posts: aggregator.postsPayload({ limit }) });
     }
 
     if (req.method === 'POST' && path === '/api/register-device') {
       const body = await readJsonBody(req);
-      const { token, appInstallId, platform } = body;
+      const token = String(body.token || '').trim();
       if (!token) return json(res, 400, { error: 'token is required' });
-      store.registerDevice({ token, appInstallId: appInstallId ?? null, platform: platform ?? 'android' });
+      notifier.register(token);
       return json(res, 200, { ok: true });
     }
 
+    if (req.method === 'POST' && path === '/api/unregister-device') {
+      const body = await readJsonBody(req);
+      const token = String(body.token || '').trim();
+      if (!token) return json(res, 400, { error: 'token is required' });
+      const removed = notifier.unregister(token);
+      return json(res, 200, { ok: true, removed });
+    }
+
     if (req.method === 'POST' && path === '/refresh') {
-      await scan();
+      const summary = await scan();
       return json(res, 200, {
         ok: true,
-        lastScanAt: cache.lastScanAt,
-        lastScanError: cache.lastScanError,
-        summary: cache.lastScanSummary,
+        lastScanAt: aggregator.state.lastScanAt,
+        lastScanError: aggregator.state.lastScanError,
+        summary,
       });
     }
 
@@ -182,11 +146,12 @@ async function handle(req, res) {
       return json(res, 200, {
         service: 'tipster-agg-backend',
         endpoints: [
-          'GET /api/health',
-          'GET /api/status',
+          'GET /api/posts',
           'GET /api/sources',
-          'GET /api/posts?limit=',
+          'GET /api/status',
+          'GET /api/health',
           'POST /api/register-device',
+          'POST /api/unregister-device',
           'POST /refresh',
         ],
       });
@@ -201,7 +166,7 @@ async function handle(req, res) {
 function setCors(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
     res.end();
@@ -245,12 +210,15 @@ function readBody(req) {
 
 function splitEnv(raw, fallback) {
   if (raw === undefined || raw === null) return fallback;
-  const parts = raw.split(',').map((s) => s.trim()).filter(Boolean);
-  return parts;
+  return raw.split(',').map((s) => s.trim()).filter(Boolean);
 }
 
 async function bootstrap() {
+  await notifier.load();
   await scan();
+  // Everything already in the seen-file at boot is old news -- never re-push.
+  notifier.markSeen(aggregator.state.posts);
+  bootstrapped = true;
   setInterval(async () => {
     try {
       await scan();
@@ -259,13 +227,14 @@ async function bootstrap() {
     }
   }, SCAN_INTERVAL_MS);
   console.log(
-    `scanner: every ${Math.round(SCAN_INTERVAL_MS / 1000)}s · leagues: ${LEAGUES.join(', ')} · channels: ${CHANNELS.join(', ')}`,
+    `scanner: every ${Math.round(SCAN_INTERVAL_MS / 1000)}s · leagues ${LEAGUES.join(', ') || '(none)'} · ` +
+      `channels ${CHANNELS.join(', ') || '(none)'} · ` +
+      `push ${pushConfigured() ? 'configured' : 'DISABLED (no Firebase credentials)'}`,
   );
 }
 
 const server = http.createServer(handle);
 
-const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 export function start() {
   server.listen(PORT, () => {
     console.log(`tipster-agg-backend listening on :${PORT}`);
@@ -273,8 +242,8 @@ export function start() {
   });
 }
 
-if (isMain) {
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   start();
 }
 
-export { server, cache, store };
+export { server, cache, aggregator, notifier };

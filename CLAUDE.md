@@ -112,7 +112,22 @@ mechanism (language, framework, self-run vs. managed Postgres) changed.
 | Extraction | Anthropic API, `claude-sonnet-4-6` | Structured JSON from unstructured posts |
 | Secrets | GitHub Actions secrets + host env | Never in repo |
 
-**Current (Amendment D):**
+**Current (Amendment F, 2026-08-21 — supersedes the Amendment D table
+below it; that table described the B-path backend, deleted in D's own
+rewrite and now fully replaced):**
+
+| Layer | Choice | Notes |
+|---|---|---|
+| Language | Node.js ≥20, plain `node:http` | No framework — matches `tradeapp/server.js` exactly |
+| Scan loop | Self-scheduled `setInterval`, `SCAN_INTERVAL_MS` | Guarded against overlap (`cache.running`), same as `tradeapp`'s `scanChain` pattern |
+| State | In-memory cache + two JSON files (`DEVICE_TOKENS_FILE`, `SEEN_POSTS_FILE`) | **No database.** Device tokens and push dedupe survive restarts via the files |
+| Telegram | Public `t.me/s/<channel>` preview fetch | No api_id/api_hash/session — private channels are simply unreadable on this path |
+| API | Plain `http.createServer` handlers | `/api/posts`, `/api/sources`, `/api/status`, `/api/health`, `/api/register-device`, `/refresh` — unchanged since E8, so the Flutter app needed no changes |
+| Testing | `node --test`, no dependency | 102 tests incl. a real server boot |
+| Deploy | Render free tier (`render.yaml`) or Docker | RUNBOOK §1; sleeps when idle, UptimeRobot heartbeat keeps the scan loop alive (RUNBOOK §3) |
+| Secrets | Host env vars only: `TELEGRAM_CHANNELS`, `FIREBASE_SERVICE_ACCOUNT_JSON`, `ESPN_LEAGUES`, `SCAN_INTERVAL_MS` | Never in repo |
+
+**Superseded (Amendment D) — kept for history:**
 
 | Layer | Choice | Notes |
 |---|---|---|
@@ -219,11 +234,19 @@ default off):**
 
 ## Docs map
 
+- **Amendment F (2026-08-21, user-directed) — the backend is now
+  tradeapp-shaped: in-memory cache, no database, Telegram via the public
+  `t.me/s/<channel>` preview (no api_id/api_hash/session), one dependency
+  (`firebase-admin`).** The E-path's SQLite store, MTProto poller, and
+  session tooling were deleted (recoverable from git history); the pure
+  modules (`espn.js`, `extract.js`, `settlement.js`, `scoring.js`) and the
+  API contract are unchanged. See the Amendment F entry at the top of
+  `docs/STATUS.md` and `docs/RUNBOOK.md` §1–§2 for the current deploy flow.
 - `docs/AMENDMENT_E.md` — the no-API path (Prompt 9): Telegram + key-less
-  ESPN data + FCM push on a free cloud host. **Built E1–E8 (2026-08-14):
-  backend complete + tested, deploy steps in `docs/RUNBOOK.md`.** Read it
-  before the Amendment B sections below if the task is about the server
-  backend or notifications.
+  ESPN data + FCM push on a free cloud host. Built E1–E8 (2026-08-14);
+  **superseded in its delivery mechanism by Amendment F** — its ESPN/
+  extraction/settlement/scoring design survives verbatim inside the F
+  rewrite, but the SQLite/MTProto parts described here no longer exist.
 - `docs/ARCHITECTURE.md` — data model, ingestion/extraction/settlement
   pipeline, adapters.
 - `docs/SCORING.md` — the ROI scoring formula, confidence intervals,
