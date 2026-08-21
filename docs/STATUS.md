@@ -27,8 +27,11 @@ real tradeapp source —
   is warn-only. The old "No API_BASE_URL" boot wall is deleted — the app
   always boots.
 - Tests updated/added (parser, feed fallback matrix with stubs, boot smoke);
-  verified by CI (`flutter analyze` + `flutter test` + release build) since
-  there is no local Flutter SDK.
+  all green in CI — **run
+  [`32479388316`](https://github.com/lumeierecollection-blip/app/actions/runs/32479388316)
+  built and signed `tipster-1096656.apk` (22.9 MB)**: analyze, test, and
+  release build all pass. This APK boots standalone with no backend URL at
+  all — install it, add channels on Admin, and the feed is live.
 
 Still true from earlier today: backend rewritten tradeapp-style (commit
 `b27fae3`, run [`32472871627`](https://github.com/lumeierecollection-blip/app/actions/runs/32472871627)
