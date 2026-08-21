@@ -220,7 +220,6 @@ class PostFeedEntry {
     );
   }
 }
-}
 
 /// /api/status -- boot + scan health, including the loud Telegram state.
 class ServiceStatus {

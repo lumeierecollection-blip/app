@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tipster_aggregator/services/api_client.dart';
 import 'package:tipster_aggregator/services/rss_source.dart';
 
 void main() {

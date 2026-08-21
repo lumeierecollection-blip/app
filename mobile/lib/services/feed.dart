@@ -45,7 +45,7 @@ class FeedLoader {
         return FeedResult(posts, null);
       } catch (_) {
         final local = await scanLocal(settings);
-        return FeedResult(local, 'Cloud feed offline — showing on-device scan.');
+        return FeedResult(local.posts, 'Cloud feed offline — showing on-device scan.');
       }
     }
 
@@ -55,7 +55,7 @@ class FeedLoader {
             (settings.redditEnabled && settings.redditSubs.isNotEmpty);
     if (!followsAnyTips) {
       return FeedResult(
-        local,
+        local.posts,
         'No tip sources on — enable Reddit/Telegram and add usernames on the '
         'Admin tab. Context rows below are news and fixtures only.',
       );
