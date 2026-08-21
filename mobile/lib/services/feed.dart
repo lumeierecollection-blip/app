@@ -53,13 +53,11 @@ class FeedLoader {
   }
 
   Future<List<PostFeedEntry>> scanLocal(List<String> channels) async {
-    final results = await Future.wait([
-      _telegram.fetchChannels(channels),
-      _fixturePulse.fetch(),
-    ]);
+    final scanned = await _telegram.fetchChannels(channels);
+    final pulse = await _fixturePulse.fetch();
     final posts = <PostFeedEntry>[];
-    posts.addAll(results[0].map(_toFeedEntry));
-    posts.addAll(results[1]);
+    posts.addAll(scanned.map(_toFeedEntry));
+    posts.addAll(pulse);
     posts.sort((a, b) => (b.postedAt ?? '').compareTo(a.postedAt ?? ''));
     return posts;
   }

@@ -21,7 +21,7 @@ class _TelegramStub extends TelegramSource {
 }
 
 class _ApiStub extends ApiClient {
-  _ApiStub(super.baseUrl, {this.fail = false});
+  _ApiStub(String baseUrl, {this.fail = false}) : super(baseUrl: baseUrl);
   final bool fail;
   @override
   Future<List<PostFeedEntry>> fetchPosts({int limit = 50}) async {

@@ -22,7 +22,7 @@ void main() {
   final apiClient = ApiClient(baseUrl: _apiBaseUrl);
   final settings = AppSettings(defaultCloudUrl: _apiBaseUrl);
   settings.load();
-  const feedLoader = FeedLoader();
+  final feedLoader = FeedLoader();
 
   if (apiClient.configured) {
     unawaited(PushManager.init(apiClient: apiClient));
