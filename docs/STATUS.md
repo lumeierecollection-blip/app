@@ -2,6 +2,38 @@
 
 ## Current position
 
+**Session 2026-08-21 — the first real APK build succeeded.** Run
+[`32466365763`](https://github.com/lumeierecollection-blip/app/actions/runs/32466365763)
+built, signed, and uploaded **`tipster-040d988.apk`** (21.8 MB) — the first
+compile proof of any of the B7/E8 Dart code (`flutter analyze`, `flutter
+test`, and the full Gradle release build all green). What it took, all real
+findings:
+
+- **Backend aligned with tradeapp's shape (user request).** The retired
+  odds-market modules were removed from the tree entirely — `lib/scan.js`,
+  `lib/fixtures.js`, `lib/odds.js`, `lib/supabase.js`, `lib/manualCheck.js`,
+  `lib/edge.js`, `lib/devig.js`, their five test files,
+  `supabase/migrations/`, and the unused `@supabase/supabase-js`
+  dependency — so `backend/` now mirrors `tradeapp/signal_aggregator/server`
+  exactly: only live code. Recoverable from git history. 129 tests pass;
+  server boot re-verified locally against every route.
+- **A certain build-breaker found and fixed in `api_client.dart`:**
+  `fetchFairPrice`/`submitManualCheck` were stranded *outside* any class
+  (unresolved `_client`/`_uri`, unbalanced braces) — left over from the E8
+  repoint. Removed along with the retired `FairPrice`/
+  `ManualCheckResult` models and the orphaned
+  `screens/manual_check_screen.dart` (nothing imported it; `/api/manual-check*`
+  was retired in E7).
+- **One real Dart null-safety error class caught by the first CI analyze**
+  (run `32466077460`): `_Badge` in `tipsters_screen.dart` relied on type
+  promotion of an instance *field*, which Dart doesn't do — fixed by
+  assigning to a local first (commit `040d988`).
+- **`GOOGLE_SERVICES_JSON` gate downgraded from hard-fail to warn-only**
+  (user-confirmed tradeoff this session): the current APK has **push
+  disabled** — it installs and runs, FCM registration just never happens.
+  Adding the secret (RUNBOOK §4) and rebuilding re-enables push; the
+  keystore and `API_BASE_URL` gates remain fail-loud.
+
 **Amendment E (Prompt 9) — the no-API path: Telegram + ESPN + FCM push.
 E1–E8 all code-complete; backend fully tested (188 tests passing locally,
 including a real local server boot).** What's done and what still needs the
@@ -61,8 +93,9 @@ user (all documented in `docs/RUNBOOK.md`):
   `docs/RUNBOOK.md` (the full "get the app on your phone" walkthrough),
   `backend/README.md` rewritten. 1 real-boot test (spawns the server with a
   temp DB + no network env, exercises every route). Live deploy by user.
-- **E8 — Flutter repoint. Code written, NOT compiled (no Flutter SDK in this
-  sandbox) — verified by `flutter analyze`/`flutter test` in the CI build.**
+- **E8 — Flutter repoint. Code written and now compile-proven (first green
+  APK build 2026-08-21, run `32466365763` — see the session note at the
+  top; the notes below describe the state before that proof existed).**
   `mobile/pubspec.yaml` adds `firebase_core ^4.13.0` + `firebase_messaging
   ^16.5.0` (versions verified on pub.dev; sdk floor bumped to >=3.6.0);
   `lib/services/push.dart` (lazy `Firebase.initializeApp()` — a build without
@@ -590,13 +623,18 @@ recoverable from git history, not actually lost — and rebuilt fresh.
 
 ## How to download and install the APK
 
-Not applicable yet — `build-apk.yml` exists (Task B7) but has never
-successfully run: it needs the Android keystore secrets and a real
-`API_BASE_URL` (see "What's blocked" above) before a human can trigger
-it. Once a run succeeds, this section gets filled in with the exact
-steps: open the Actions run, download the `tipster-<short-sha>.apk`
-artifact, unzip it, enable "install from unknown sources" once, install,
-and verify the installed build's commit matches what you expected.
+Working since 2026-08-21. Open
+[run `32466365763`](https://github.com/lumeierecollection-blip/app/actions/runs/32466365763)
+(or any newer green **Build APK** run under the Actions tab), download the
+`tipster-<short-sha>.apk` artifact from the run's Artifacts section, copy it
+to the phone, enable "install from unknown sources" once, and install.
+Verify the installed build's short SHA matches the commit you expected.
+
+Two caveats on the current artifact: it was built **without**
+`GOOGLE_SERVICES_JSON`, so push notifications are inactive until that secret
+is added and a new APK is built (RUNBOOK §4); and `API_BASE_URL` points at
+whatever is set as that repo secret — the backend must actually be deployed
+(RUNBOOK §1–2) for the tabs to show live data.
 
 ## Notes for the next session
 
