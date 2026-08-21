@@ -37,7 +37,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(AppShell), findsOneWidget);
-    expect(find.text('Slips'), findsOneWidget);
+    // The label appears on both the AppBar and the nav destination.
+    expect(find.text('Slips'), findsWidgets);
     expect(find.textContaining('No Telegram channels followed yet'), findsOneWidget);
     expect(find.textContaining('No API_BASE_URL was set'), findsNothing);
   });

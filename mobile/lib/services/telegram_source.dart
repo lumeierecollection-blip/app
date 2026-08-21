@@ -76,7 +76,7 @@ class TelegramSource {
   }
 
   String _cleanHtml(String html) {
-    final withBreaks = html
+    final stripped = html
         .replaceAll(RegExp(r'<br\s*/?>'), '\n')
         .replaceAll(RegExp(r'<[^>]+>'), ' ')
         .replaceAll('&amp;', '&')
@@ -84,15 +84,12 @@ class TelegramSource {
         .replaceAll('&gt;', '>')
         .replaceAll('&quot;', '"')
         .replaceAll('&#39;', "'");
-    // Collapse runs of spaces/tabs within each line, but keep the line
-    // breaks a <br/> represents -- a bare `\s+` collapse (the previous
-    // approach) eats newlines along with spaces and glues joined lines
-    // like a "join @channel" signature onto the tip text above it.
-    return withBreaks
+    // Collapse whitespace within each line only, so <br>-separated lines
+    // survive as real newlines.
+    return stripped
         .split('\n')
-        .map((line) => line.replaceAll(RegExp(r'[ \t]+'), ' ').trim())
+        .map((line) => line.replaceAll(RegExp(r'\s+'), ' ').trim())
         .where((line) => line.isNotEmpty)
-        .join('\n')
-        .trim();
+        .join('\n');
   }
 }

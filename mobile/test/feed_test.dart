@@ -70,15 +70,15 @@ void main() {
     expect(result.notice, contains('No Telegram channels followed yet'));
   });
 
-  test('standalone with channels: newest-first merge of posts and fixtures', () async {
+  test('standalone with channels: tips lead, fixture context appended below', () async {
     final loader = FeedLoader(
       fixturePulse: _PulseStub([pulseRow('1', '2026-08-22T16:30:00Z')]),
       telegramSource: _TelegramStub([scannedPost('x/9')]),
     );
     final settings = AppSettings()..setTelegramChannels(['chan']);
     final result = await loader.load(settings, _ApiStub(''));
-    // The scanned post (2026-08-21) is newer than the fixture (2026-08-22)?
-    // No -- the fixture kicks off later, so it sorts after by postedAt desc.
+    // Telegram tips always lead (newest first); fixture-pulse rows are
+    // context and never outrank a tip regardless of kickoff date.
     expect(result.posts.first.id, 'tg-x/9');
     expect(result.posts.last.id, 'pulse-1');
     expect(result.notice, isNull);
