@@ -173,6 +173,13 @@ class ChannelScore {
   }
 }
 
+/// What a feed row is, honestly labeled:
+/// - [tip]: a human's pick from Telegram/Reddit -- what the app exists to
+///   aggregate. On-device rows are raw until the cloud parses/scores them.
+/// - [context]: news headlines or fixture data -- useful for judging tips,
+///   never scored, never rendered as a prediction (the audit rule).
+enum PostKind { tip, context }
+
 /// One post from /api/posts -- the feed row the Slips tab renders.
 class PostFeedEntry {
   PostFeedEntry({
@@ -183,6 +190,7 @@ class PostFeedEntry {
     this.postedAt,
     this.capturedAt,
     required this.selectionCount,
+    this.sourceKind = PostKind.tip,
   });
 
   final String id;
@@ -192,20 +200,26 @@ class PostFeedEntry {
   final String? postedAt;
   final String? capturedAt;
   final int selectionCount;
+  final PostKind sourceKind;
 
   factory PostFeedEntry.fromJson(Map<String, dynamic> json) {
     return PostFeedEntry(
       // Cloud rows carry numeric ids; on-device scan rows use string ids
-      // ('tg-<channel>/<n>', 'pulse-<espnId>') -- both are opaque here.
+      // ('tg-<channel>/<n>', 'reddit-<id>', 'rss-<hash>', 'pulse-<espnId>')
+      // -- both are opaque here.
       id: json['id']?.toString() ?? '',
-      sourceHandle: json['handle'] as String,
-      sourceDisplayName: json['source_display_name'] as String? ?? json['handle'] as String,
-      rawText: json['raw_text'] as String? ?? '',
+      sourceHandle: json['handle'] as String? ?? json['sourceHandle'] as String? ?? '',
+      sourceDisplayName: json['source_display_name'] as String? ??
+          json['sourceDisplayName'] as String? ??
+          json['handle'] as String? ??
+          '',
+      rawText: json['raw_text'] as String? ?? json['rawText'] as String? ?? '',
       postedAt: json['posted_at'] as String?,
       capturedAt: json['captured_at'] as String?,
       selectionCount: (json['selection_count'] as num?)?.toInt() ?? 0,
     );
   }
+}
 }
 
 /// /api/status -- boot + scan health, including the loud Telegram state.

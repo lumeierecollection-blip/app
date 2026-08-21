@@ -88,6 +88,7 @@ class FixturePulse {
       rawText: lines.join('\n'),
       postedAt: date,
       selectionCount: 0,
+      sourceKind: PostKind.context,
     );
   }
 }

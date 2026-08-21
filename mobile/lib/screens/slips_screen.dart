@@ -6,12 +6,12 @@ import '../services/feed.dart';
 import '../services/settings.dart';
 import '../theme/type.dart';
 
-/// docs/DESIGN.md §11.8 screen 1, the home screen. Amendment F: loads like
-/// tradeapp's feed -- through the configured cloud backend when one is set,
-/// otherwise an on-device scan (t.me/s Telegram + ESPN fixtures). The raw
-/// text of every row is shown; nothing is fabricated behind it. On-device
-/// rows show "not parsed on-device" because pick extraction/settling/scoring
-/// are server-side features.
+/// docs/DESIGN.md §11.8 screen 1, the home screen -- renamed "Feed" since it
+/// now accumulates everything, tradeapp-style: Telegram + Reddit tips first
+/// (newest first), then clearly-labeled context (football news RSS, ESPN
+/// fixtures). Cloud backend wins when configured; on-device scan is the
+/// fallback and the default. Raw text of every row is shown; nothing is
+/// fabricated behind it.
 class SlipsScreen extends StatefulWidget {
   const SlipsScreen({super.key, required this.apiClient, this.loader});
 
@@ -51,7 +51,7 @@ class _SlipsScreenState extends State<SlipsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Slips')),
+      appBar: AppBar(title: const Text('Feed')),
       body: FutureBuilder<FeedResult>(
         future: _future,
         builder: (context, snapshot) {
@@ -112,8 +112,6 @@ class _PostCard extends StatelessWidget {
 
   final PostFeedEntry post;
 
-  bool get _isPulse => post.sourceHandle == 'fixture-pulse';
-
   @override
   Widget build(BuildContext context) {
     return Card(
@@ -142,7 +140,11 @@ class _PostCard extends StatelessWidget {
   }
 
   String get _statusLine {
-    if (_isPulse) return 'context from ESPN · not a tip';
+    if (post.sourceKind == PostKind.context) {
+      return post.sourceHandle == 'fixture-pulse'
+          ? 'context from ESPN · not a tip'
+          : 'news · not a tip';
+    }
     return post.selectionCount > 0
         ? '${post.selectionCount} selection${post.selectionCount == 1 ? '' : 's'} parsed'
         : 'raw post · not parsed on-device';

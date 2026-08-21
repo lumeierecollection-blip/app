@@ -43,7 +43,7 @@ class _AppShellState extends State<AppShell> {
         selectedIndex: _index,
         onDestinationSelected: (i) => setState(() => _index = i),
         destinations: const [
-          NavigationDestination(icon: Icon(Icons.receipt_long), label: 'Slips'),
+          NavigationDestination(icon: Icon(Icons.receipt_long), label: 'Feed'),
           NavigationDestination(icon: Icon(Icons.leaderboard), label: 'Tipsters'),
           NavigationDestination(icon: Icon(Icons.fact_check), label: 'Audit'),
           NavigationDestination(icon: Icon(Icons.monitor_heart), label: 'Health'),

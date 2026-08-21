@@ -4,10 +4,12 @@ import 'package:provider/provider.dart';
 import '../services/settings.dart';
 import '../theme/type.dart';
 
-/// docs/DESIGN.md §11.8 screen 6. Amendment F makes this the control room
-/// for tradeapp's model: the followed Telegram channels (scanned on-device)
-/// and the optional cloud backend URL (server-side parsing/scoring/push),
-/// plus the §11.3a/§11.4 "Reduce transparency" setting.
+/// docs/DESIGN.md §11.8 screen 6. Amendment F makes this the control room,
+/// tradeapp-Settings style: per-source switches (Telegram, Reddit, RSS
+/// news, ESPN fixtures), the followed Telegram channels and Reddit subs
+/// (scanned on-device), the optional cloud backend URL (server-side
+/// parsing/scoring/push), plus the §11.3a/§11.4 "Reduce transparency"
+/// setting.
 class AdminScreen extends StatefulWidget {
   const AdminScreen({super.key});
 
@@ -17,6 +19,7 @@ class AdminScreen extends StatefulWidget {
 
 class _AdminScreenState extends State<AdminScreen> {
   late final TextEditingController _channelsController;
+  late final TextEditingController _subsController;
   late final TextEditingController _cloudController;
 
   @override
@@ -24,14 +27,20 @@ class _AdminScreenState extends State<AdminScreen> {
     super.initState();
     final settings = context.read<AppSettings>();
     _channelsController = TextEditingController(text: settings.telegramChannels.join(', '));
+    _subsController = TextEditingController(text: settings.redditSubs.join(', '));
     _cloudController = TextEditingController(text: settings.cloudUrl);
   }
 
   @override
   void dispose() {
     _channelsController.dispose();
+    _subsController.dispose();
     _cloudController.dispose();
     super.dispose();
+  }
+
+  void _toast(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -42,7 +51,61 @@ class _AdminScreenState extends State<AdminScreen> {
       body: ListView(
         children: [
           const Padding(
+            padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
+            child: Text('Sources', style: AppType.label),
+          ),
+          SwitchListTile(
+            title: const Text('Reddit tips'),
+            subtitle: const Text('r/ subreddits below — public JSON, no login'),
+            value: settings.redditEnabled,
+            onChanged: (v) => context.read<AppSettings>().setSourceEnabled(reddit: v),
+          ),
+          SwitchListTile(
+            title: const Text('Telegram channels'),
+            subtitle: const Text('t.me/s preview of the channels listed below'),
+            value: settings.telegramEnabled,
+            onChanged: (v) => context.read<AppSettings>().setSourceEnabled(telegram: v),
+          ),
+          SwitchListTile(
+            title: const Text('Football news (RSS)'),
+            subtitle: const Text('BBC Sport + Guardian headlines — context only'),
+            value: settings.rssEnabled,
+            onChanged: (v) => context.read<AppSettings>().setSourceEnabled(rss: v),
+          ),
+          SwitchListTile(
+            title: const Text('Fixtures (ESPN)'),
+            subtitle: const Text('Upcoming matches with kickoff times'),
+            value: settings.espnEnabled,
+            onChanged: (v) => context.read<AppSettings>().setSourceEnabled(espn: v),
+          ),
+          const Divider(),
+          const Padding(
             padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+            child: Text('Reddit subreddits', style: AppType.label),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: TextField(
+              controller: _subsController,
+              decoration: const InputDecoration(
+                hintText: 'SoccerBetting, sportsbook',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            child: OutlinedButton.icon(
+              icon: const Icon(Icons.save_outlined),
+              label: const Text('Save subreddits'),
+              onPressed: () async {
+                await context.read<AppSettings>().setRedditSubs(_subsController.text.split(','));
+                _toast('Following ${settings.redditSubs.length} subreddit(s)');
+              },
+            ),
+          ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
             child: Text('Telegram channels', style: AppType.label),
           ),
           Padding(
@@ -70,11 +133,7 @@ class _AdminScreenState extends State<AdminScreen> {
               label: const Text('Save channels'),
               onPressed: () async {
                 await context.read<AppSettings>().setTelegramChannels(_channelsController.text.split(','));
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Following ${settings.telegramChannels.length} channel(s)')),
-                  );
-                }
+                _toast('Following ${settings.telegramChannels.length} channel(s)');
               },
             ),
           ),
@@ -100,7 +159,7 @@ class _AdminScreenState extends State<AdminScreen> {
             child: Text(
               settings.cloudConfigured
                   ? 'Set — posts are parsed, settled, and scored server-side; push is registered.'
-                  : 'Empty — standalone mode: live posts and fixtures on-device; pick parsing, '
+                  : 'Empty — standalone mode: live tips and context on-device; pick parsing, '
                       'tipster scores, and push need a backend (docs/RUNBOOK.md §1).',
               style: AppType.body,
             ),
@@ -112,17 +171,7 @@ class _AdminScreenState extends State<AdminScreen> {
               label: Text(settings.cloudConfigured ? 'Update URL' : 'Connect'),
               onPressed: () async {
                 await context.read<AppSettings>().setCloudUrl(_cloudController.text);
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        context.read<AppSettings>().cloudConfigured
-                            ? 'Cloud backend set'
-                            : 'Cloud backend cleared',
-                      ),
-                    ),
-                  );
-                }
+                _toast(settings.cloudConfigured ? 'Cloud backend set' : 'Cloud backend cleared');
               },
             ),
           ),
